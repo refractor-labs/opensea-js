@@ -205,6 +205,20 @@ export type WyvernAtomicMatchParameters = [
   string[]
 ];
 
+export type WyvernAtomicMatchParametersPrysm = [
+  string[],
+  string[],
+  Array<number | string>,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  Array<number | string>,
+  string[]
+];
+
 /**
  * The OpenSea account object appended to orders, providing extra metadata, profile images and usernames
  */

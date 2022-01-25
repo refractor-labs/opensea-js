@@ -85,6 +85,7 @@ import {
   UnsignedOrder,
   WyvernAsset,
   WyvernAtomicMatchParameters,
+  WyvernAtomicMatchParametersPrysm,
   WyvernFTAsset,
   WyvernNFTAsset,
   WyvernSchemaName,
@@ -1155,14 +1156,12 @@ export class OpenSeaPort {
     const { buy, sell } = assignOrdersToSides(order, matchingOrder);
 
     const metadata = this._getMetadata(order, referrerAddress);
-    const transactionHash = await this._prysmAtomicMatch({
+    return this._prysmAtomicMatch({
       buy,
       sell,
       accountAddress,
       metadata,
     });
-
-    return transactionHash;
 
     // await this._confirmTransaction(
     //   transactionHash,
@@ -4309,7 +4308,20 @@ export class OpenSeaPort {
         }..."`
       );
     }
-    return { args, txnData };
+    const argsPrysm: WyvernAtomicMatchParametersPrysm = [
+      args[0],
+      args[1].map((bn) => bn.toString()),
+      args[2].map((bn) => bn.toString()),
+      args[3],
+      args[4],
+      args[5],
+      args[6],
+      args[7],
+      args[8],
+      args[9].map((bn) => bn.toString()),
+      args[10],
+    ];
+    return { args: argsPrysm, txnData };
   }
 
   private async _getRequiredAmountForTakingSellOrder(sell: Order) {
