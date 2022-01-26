@@ -1,3 +1,4 @@
+import BigNumber from "bignumber.js";
 import { assert } from "chai";
 import { suite, test } from "mocha";
 import * as Web3 from "web3";
@@ -103,5 +104,15 @@ suite("seaport: misc", () => {
     );
     assert.equal(acccountOneIsContractAddress, true);
     assert.equal(acccountTwoIsContractAddress, false);
+  });
+
+  test("format bignumber", async () => {
+    const num =
+      "10917913132094337429858016386670571908481547142523207709855476084178537152513";
+    const bn = new BigNumber(num);
+
+    console.log(bn.toFormat(0, BigNumber.ROUND_FLOOR));
+    console.log(bn.toFixed(0, BigNumber.ROUND_FLOOR));
+    assert.equal(num, bn.toFixed(0, BigNumber.ROUND_FLOOR));
   });
 });

@@ -4310,15 +4310,15 @@ export class OpenSeaPort {
     }
     const argsPrysm: WyvernAtomicMatchParametersPrysm = [
       args[0],
-      args[1].map((bn) => bn.toString()),
-      args[2].map((bn) => bn.toString()),
+      args[1].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      args[2].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
       args[3],
       args[4],
       args[5],
       args[6],
       args[7],
       args[8],
-      args[9].map((bn) => bn.toString()),
+      args[9].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
       args[10],
     ];
     return { args: argsPrysm, txnData };
