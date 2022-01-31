@@ -1611,6 +1611,77 @@ export class OpenSeaPort {
   }
 
   /**
+   * Approve a fungible token (e.g. W-ETH) for use in trades.
+   * Called internally, but exposed for dev flexibility.
+   * Checks to see if the minimum amount is already approved, first.
+   * @param param0 __namedParameters Object
+   * @param accountAddress The user's wallet address
+   * @param tokenAddress The contract address of the token being approved
+   * @param proxyAddress The user's proxy address. If unspecified, uses the Wyvern token transfer proxy address.
+   * @param minimumAmount The minimum amount needed to skip a transaction. Defaults to the max-integer.
+   */
+  public async prysmApproveFungibleToken({
+    accountAddress,
+    tokenAddress,
+    proxyAddress,
+    minimumAmount = WyvernProtocol.MAX_UINT_256,
+  }: {
+    accountAddress: string;
+    tokenAddress: string;
+    proxyAddress?: string;
+    minimumAmount?: BigNumber;
+  }): Promise<{ callData: string; from: string; to: string } | null> {
+    proxyAddress =
+      proxyAddress ||
+      WyvernProtocol.getTokenTransferProxyAddress(this._networkName);
+
+    const approvedAmount = await this._getApprovedTokenCount({
+      accountAddress,
+      tokenAddress,
+      proxyAddress,
+    });
+
+    if (approvedAmount.greaterThanOrEqualTo(minimumAmount)) {
+      this.logger("Already approved enough currency for trading");
+      return null;
+    }
+
+    this.logger(
+      `Not enough token approved for trade: ${approvedAmount} approved to transfer ${tokenAddress}`
+    );
+
+    this._dispatch(EventType.ApproveCurrency, {
+      accountAddress,
+      contractAddress: tokenAddress,
+      proxyAddress,
+    });
+
+    const hasOldApproveMethod = [ENJIN_COIN_ADDRESS, MANA_ADDRESS].includes(
+      tokenAddress.toLowerCase()
+    );
+
+    if (minimumAmount.greaterThan(0) && hasOldApproveMethod) {
+      // Older erc20s require initial approval to be 0
+      await this.unapproveFungibleToken({
+        accountAddress,
+        tokenAddress,
+        proxyAddress,
+      });
+    }
+
+    return {
+      callData: encodeCall(
+        getMethod(ERC20, "approve"),
+        // Always approve maximum amount, to prevent the need for followup
+        // transactions (and because old ERC20s like MANA/ENJ are non-compliant)
+        [proxyAddress, WyvernProtocol.MAX_UINT_256.toString()]
+      ),
+      from: accountAddress,
+      to: tokenAddress,
+    };
+  }
+
+  /**
    * Un-approve a fungible token (e.g. W-ETH) for use in trades.
    * Called internally, but exposed for dev flexibility.
    * Useful for old ERC20s that require a 0 approval count before
@@ -3531,7 +3602,11 @@ export class OpenSeaPort {
       includeInOrderBook,
     ];
 
-    return { from: accountAddress, calldataArgs: args };
+    return {
+      from: accountAddress,
+      to: WyvernProtocol.getExchangeContractAddress(this._networkName),
+      calldataArgs: args,
+    };
   }
 
   public async _validateOrder(order: Order): Promise<boolean> {
@@ -3751,6 +3826,97 @@ export class OpenSeaPort {
         `Failed to validate buy order parameters. Make sure you're on the right network!`
       );
     }
+  }
+
+  // Throws
+  public async prysmBuyOrderValidationAndApprovals({
+    order,
+    counterOrder,
+    accountAddress,
+  }: {
+    order: UnhashedOrder;
+    counterOrder?: Order;
+    accountAddress: string;
+  }) {
+    const tokenAddress = order.paymentToken;
+
+    if (tokenAddress != NULL_ADDRESS) {
+      const balance = await this.getTokenBalance({
+        accountAddress,
+        tokenAddress,
+      });
+
+      /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
+      let minimumAmount = makeBigNumber(order.basePrice);
+      if (counterOrder) {
+        minimumAmount = await this._getRequiredAmountForTakingSellOrder(
+          counterOrder
+        );
+      }
+
+      // Check WETH balance
+      if (balance.toNumber() < minimumAmount.toNumber()) {
+        if (
+          tokenAddress ==
+          WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
+        ) {
+          throw new Error("Insufficient balance. You may need to wrap Ether.");
+        } else {
+          throw new Error("Insufficient balance.");
+        }
+      }
+
+      // Check token approval
+      // This can be done at a higher level to show UI
+      const needsApprovalCalldata = await this.prysmApproveFungibleToken({
+        accountAddress,
+        tokenAddress,
+        minimumAmount,
+      });
+      if (needsApprovalCalldata) {
+        return needsApprovalCalldata;
+      }
+    }
+
+    // Check order formation
+    const buyValid =
+      await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
+        [
+          order.exchange,
+          order.maker,
+          order.taker,
+          order.feeRecipient,
+          order.target,
+          order.staticTarget,
+          order.paymentToken,
+        ],
+        [
+          order.makerRelayerFee,
+          order.takerRelayerFee,
+          order.makerProtocolFee,
+          order.takerProtocolFee,
+          order.basePrice,
+          order.extra,
+          order.listingTime,
+          order.expirationTime,
+          order.salt,
+        ],
+        order.feeMethod,
+        order.side,
+        order.saleKind,
+        order.howToCall,
+        order.calldata,
+        order.replacementPattern,
+        order.staticExtradata,
+        { from: accountAddress }
+      );
+    if (!buyValid) {
+      console.error(order);
+      throw new Error(
+        `Failed to validate buy order parameters. Make sure you're on the right network!`
+      );
+    }
+    return null;
   }
 
   /**
