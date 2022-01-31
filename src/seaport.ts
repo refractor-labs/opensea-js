@@ -1276,6 +1276,57 @@ export class OpenSeaPort {
   }
 
   /**
+   * Cancel an order on-chain, preventing it from ever being fulfilled.
+   * @param param0 __namedParameters Object
+   * @param order The order to cancel
+   * @param accountAddress The order maker's wallet address
+   */
+  public async prysmCancelOrder({
+    order,
+    accountAddress,
+  }: {
+    order: Order;
+    accountAddress: string;
+  }) {
+    this._dispatch(EventType.CancelOrder, { order, accountAddress });
+
+    const args = [
+      [
+        order.exchange,
+        order.maker,
+        order.taker,
+        order.feeRecipient,
+        order.target,
+        order.staticTarget,
+        order.paymentToken,
+      ],
+      [
+        order.makerRelayerFee,
+        order.takerRelayerFee,
+        order.makerProtocolFee,
+        order.takerProtocolFee,
+        order.basePrice,
+        order.extra,
+        order.listingTime,
+        order.expirationTime,
+        order.salt,
+      ],
+      order.feeMethod,
+      order.side,
+      order.saleKind,
+      order.howToCall,
+      order.calldata,
+      order.replacementPattern,
+      order.staticExtradata,
+      order.v || 0,
+      order.r || NULL_BLOCK_HASH,
+      order.s || NULL_BLOCK_HASH,
+    ];
+
+    return { from: accountAddress, calldataArgs: args };
+  }
+
+  /**
    * Approve a non-fungible token for use in trades.
    * Requires an account to be initialized first.
    * Called internally, but exposed for dev flexibility.
@@ -3435,6 +3486,52 @@ export class OpenSeaPort {
     );
 
     return transactionHash;
+  }
+
+  /**
+   * Instead of signing an off-chain order, you can approve an order
+   * with on on-chain transaction using this method
+   * @param order Order to approve
+   * @returns Transaction calldata
+   */
+  public async prysmApproveOrder(order: UnsignedOrder) {
+    const accountAddress = order.maker;
+    const includeInOrderBook = true;
+
+    this._dispatch(EventType.ApproveOrder, { order, accountAddress });
+
+    const args = [
+      [
+        order.exchange,
+        order.maker,
+        order.taker,
+        order.feeRecipient,
+        order.target,
+        order.staticTarget,
+        order.paymentToken,
+      ],
+      [
+        order.makerRelayerFee,
+        order.takerRelayerFee,
+        order.makerProtocolFee,
+        order.takerProtocolFee,
+        order.basePrice,
+        order.extra,
+        order.listingTime,
+        order.expirationTime,
+        order.salt,
+      ].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      order.feeMethod,
+      order.side,
+      order.saleKind,
+      order.howToCall,
+      order.calldata,
+      order.replacementPattern,
+      order.staticExtradata,
+      includeInOrderBook,
+    ];
+
+    return { from: accountAddress, calldataArgs: args };
   }
 
   public async _validateOrder(order: Order): Promise<boolean> {
