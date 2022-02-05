@@ -60,6 +60,8 @@ export enum EventType {
   UnwrapAssets = "UnwrapAssets",
   LiquidateAssets = "LiquidateAssets",
   PurchaseAssets = "PurchaseAssets",
+
+  PrysmPreValidateOrder = "PrysmPreValidateOrder",
 }
 
 /**

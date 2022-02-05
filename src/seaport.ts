@@ -2597,6 +2597,57 @@ export class OpenSeaPort {
   }
 
   /**
+   * Initialize the proxy for a user's wallet.
+   * Proxies are used to make trades on behalf of the order's maker so that
+   *  trades can happen when the maker isn't online.
+   * Internal method exposed for dev flexibility.
+   * @param accountAddress The user's wallet address
+   */
+  public async prysmInitializeProxy(accountAddress: string) {
+    this._dispatch(EventType.InitializeAccount, { accountAddress });
+    this.logger(`Initializing proxy for account: ${accountAddress}`);
+
+    const txnData = { from: accountAddress };
+    const gasEstimate =
+      await this._wyvernProtocolReadOnly.wyvernProxyRegistry.registerProxy.estimateGasAsync(
+        txnData
+      );
+    return {
+      ...txnData,
+      to: WyvernProtocol.getProxyRegistryContractAddress(this._networkName),
+      method: "registerProxy",
+      callData: undefined,
+      gasEstimate: this._correctGasAmount(gasEstimate),
+    };
+    // const transactionHash =
+    //   await this._wyvernProtocol.wyvernProxyRegistry.registerProxy.sendTransactionAsync(
+    //     {
+    //       ...txnData,
+    //       gas: this._correctGasAmount(gasEstimate),
+    //     }
+    //   );
+    //
+    // await this._confirmTransaction(
+    //   transactionHash,
+    //   EventType.InitializeAccount,
+    //   "Initializing proxy for account",
+    //   async () => {
+    //     const polledProxy = await this._getProxy(accountAddress);
+    //     return !!polledProxy;
+    //   }
+    // );
+    //
+    // const proxyAddress = await this._getProxy(accountAddress, 10);
+    // if (!proxyAddress) {
+    //   throw new Error(
+    //     "Failed to initialize your account :( Please restart your wallet/browser and try again!"
+    //   );
+    // }
+    //
+    // return proxyAddress;
+  }
+
+  /**
    * For a fungible token to use in trades (like W-ETH), get the amount
    *  approved for use by the Wyvern transfer proxy.
    * Internal method exposed for dev flexibility.
@@ -3501,6 +3552,82 @@ export class OpenSeaPort {
     }
   }
 
+  // Throws
+  public async prysmSellOrderValidationAndApprovals({
+    order,
+    accountAddress,
+  }: {
+    order: UnhashedOrder;
+    accountAddress: string;
+  }) {
+    const wyAssets =
+      "bundle" in order.metadata
+        ? order.metadata.bundle.assets
+        : order.metadata.asset
+        ? [order.metadata.asset]
+        : [];
+    const schemaNames =
+      "bundle" in order.metadata && "schemas" in order.metadata.bundle
+        ? order.metadata.bundle.schemas
+        : "schema" in order.metadata
+        ? [order.metadata.schema]
+        : [];
+    const tokenAddress = order.paymentToken;
+
+    await this._approveAll({ schemaNames, wyAssets, accountAddress });
+
+    // For fulfilling bids,
+    // need to approve access to fungible token because of the way fees are paid
+    // This can be done at a higher level to show UI
+    if (tokenAddress != NULL_ADDRESS) {
+      const minimumAmount = makeBigNumber(order.basePrice);
+      await this.approveFungibleToken({
+        accountAddress,
+        tokenAddress,
+        minimumAmount,
+      });
+    }
+
+    // Check sell parameters
+    const sellValid =
+      await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
+        [
+          order.exchange,
+          order.maker,
+          order.taker,
+          order.feeRecipient,
+          order.target,
+          order.staticTarget,
+          order.paymentToken,
+        ],
+        [
+          order.makerRelayerFee,
+          order.takerRelayerFee,
+          order.makerProtocolFee,
+          order.takerProtocolFee,
+          order.basePrice,
+          order.extra,
+          order.listingTime,
+          order.expirationTime,
+          order.salt,
+        ],
+        order.feeMethod,
+        order.side,
+        order.saleKind,
+        order.howToCall,
+        order.calldata,
+        order.replacementPattern,
+        order.staticExtradata,
+        { from: accountAddress }
+      );
+    if (!sellValid) {
+      console.error(order);
+      throw new Error(
+        `Failed to validate sell order parameters. Make sure you're on the right network!`
+      );
+    }
+  }
+
   /**
    * Instead of signing an off-chain order, you can approve an order
    * with on on-chain transaction using this method
@@ -3610,6 +3737,43 @@ export class OpenSeaPort {
   }
 
   public async _validateOrder(order: Order): Promise<boolean> {
+    const debugOrderData = [
+      [
+        order.exchange,
+        order.maker,
+        order.taker,
+        order.feeRecipient,
+        order.target,
+        order.staticTarget,
+        order.paymentToken,
+      ],
+      [
+        order.makerRelayerFee,
+        order.takerRelayerFee,
+        order.makerProtocolFee,
+        order.takerProtocolFee,
+        order.basePrice,
+        order.extra,
+        order.listingTime,
+        order.expirationTime,
+        order.salt,
+      ].map((n) => n.toFixed(0, BigNumber.ROUND_FLOOR)),
+      order.feeMethod,
+      order.side,
+      order.saleKind,
+      order.howToCall,
+      order.calldata,
+      order.replacementPattern,
+      order.staticExtradata,
+      order.v || 0,
+      order.r || NULL_BLOCK_HASH,
+      order.s || NULL_BLOCK_HASH,
+    ];
+    this._dispatch(EventType.PrysmPreValidateOrder, {
+      order,
+      debugOrderData,
+    } as EventData);
+
     const isValid =
       await this._wyvernProtocolReadOnly.wyvernExchange.validateOrder_.callAsync(
         [
@@ -3724,6 +3888,91 @@ export class OpenSeaPort {
               accountAddress,
               proxyAddress,
             });
+          // For other assets, including contracts:
+          // Send them to the user's proxy
+          // if (where != WyvernAssetLocation.Proxy) {
+          //   return this.transferOne({
+          //     schemaName: schema.name,
+          //     asset: wyAsset,
+          //     isWyvernAsset: true,
+          //     fromAddress: accountAddress,
+          //     toAddress: proxy
+          //   })
+          // }
+          // return true
+        }
+      })
+    );
+  }
+
+  public async prysmApproveAll({
+    schemaNames,
+    wyAssets,
+    accountAddress,
+    proxyAddress,
+  }: {
+    schemaNames: WyvernSchemaName[];
+    wyAssets: WyvernAsset[];
+    accountAddress: string;
+    proxyAddress?: string;
+  }) {
+    proxyAddress =
+      proxyAddress || (await this._getProxy(accountAddress)) || undefined;
+    if (!proxyAddress) {
+      return await this.prysmInitializeProxy(accountAddress);
+    }
+    const contractsWithApproveAll: Set<string> = new Set();
+
+    return Promise.all(
+      wyAssets.map(async (wyAsset, i) => {
+        const schemaName = schemaNames[i];
+        // Verify that the taker owns the asset
+        let isOwner;
+        try {
+          isOwner = await this._ownsAssetOnChain({
+            accountAddress,
+            proxyAddress,
+            wyAsset,
+            schemaName,
+          });
+        } catch (error) {
+          // let it through for assets we don't support yet
+          isOwner = true;
+        }
+        if (!isOwner) {
+          const minAmount = "quantity" in wyAsset ? wyAsset.quantity : 1;
+          console.error(
+            `Failed on-chain ownership check: ${accountAddress} on ${schemaName}:`,
+            wyAsset
+          );
+          throw new Error(
+            `You don't own enough to do that (${minAmount} base units of ${
+              wyAsset.address
+            }${wyAsset.id ? " token " + wyAsset.id : ""})`
+          );
+        }
+        switch (schemaName) {
+          case WyvernSchemaName.ERC721:
+          case WyvernSchemaName.ERC721v3:
+          case WyvernSchemaName.ERC1155:
+          case WyvernSchemaName.LegacyEnjin:
+          case WyvernSchemaName.ENSShortNameAuction:
+            // Handle NFTs and SFTs
+            // eslint-disable-next-line no-case-declarations
+            const wyNFTAsset = wyAsset as WyvernNFTAsset;
+            return await this.approveSemiOrNonFungibleToken({
+              tokenId: wyNFTAsset.id.toString(),
+              tokenAddress: wyNFTAsset.address,
+              accountAddress,
+              proxyAddress,
+              schemaName,
+              skipApproveAllIfTokenAddressIn: contractsWithApproveAll,
+            });
+          case WyvernSchemaName.ERC20:
+            // Handle FTs
+
+            throw new Error("ERC20 not supported for Squads");
+
           // For other assets, including contracts:
           // Send them to the user's proxy
           // if (where != WyvernAssetLocation.Proxy) {
