@@ -1611,18 +1611,19 @@ export class OpenSeaPort {
           contractAddress: tokenAddress,
         });
 
-        const gasEstimateRes = await contract.setApprovalForAll.estimateGas(
-          proxyAddress,
-          true
-        );
+        // const gasEstimateRes = await contract.setApprovalForAll.estimateGas(
+        //   proxyAddress,
+        //   true
+        // );
 
+        this.logger("Approving proxy for all tokens");
         return {
           from: accountAddress,
           to: contract.address,
           method: "setApprovalForAll",
           callData: contract.setApprovalForAll.getData(proxyAddress, true),
           abi: tokenAbi,
-          gasEstimate: gasEstimateRes,
+          gasEstimate: undefined,
         };
       } catch (error) {
         console.error(error);
@@ -2814,6 +2815,7 @@ export class OpenSeaPort {
       await this._wyvernProtocolReadOnly.wyvernProxyRegistry.registerProxy.estimateGasAsync(
         txnData
       );
+    this.logger(`Prysm Gas estimate: ${gasEstimate}`);
     return {
       ...txnData,
       to: WyvernProtocol.getProxyRegistryContractAddress(this._networkName),
