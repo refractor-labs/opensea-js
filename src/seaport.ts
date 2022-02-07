@@ -4,6 +4,7 @@ import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import Web3 from "web3";
 import { WyvernProtocol } from "wyvern-js";
+import { proxyRegistryABI } from "wyvern-js/src/utils/proxyRegistryABI";
 import * as WyvernSchemas from "wyvern-schemas";
 import { Schema } from "wyvern-schemas/dist/types";
 import { OpenSeaAPI } from "./api";
@@ -73,6 +74,7 @@ import {
   FeeMethod,
   HowToCall,
   Network,
+  NotSubmittedTransaction,
   OpenSeaAPIConfig,
   OpenSeaAsset,
   OpenSeaFungibleToken,
@@ -1444,7 +1446,11 @@ export class OpenSeaPort {
     }
 
     // Does not support ApproveAll (ERC721 v1 or v2)
-    this.logger("Contract does not support Approve All");
+    this.logger(
+      "Contract does not support Approve All. Contract Unsupported by Prysm at this time."
+    );
+
+    // todo later!
 
     const approvalOneCheck = async () => {
       // Note: approvedAddr will be '0x' if not supported
@@ -1515,6 +1521,194 @@ export class OpenSeaPort {
         "Couldn't get permission to approve this token for trading. Its contract might not be implemented correctly. Please contact the developer!"
       );
     }
+  }
+
+  /**
+   * Approve a non-fungible token for use in trades.
+   * Requires an account to be initialized first.
+   * Called internally, but exposed for dev flexibility.
+   * Checks to see if already approved, first. Then tries different approval methods from best to worst.
+   * @param param0 __namedParameters Object
+   * @param tokenId Token id to approve, but only used if approve-all isn't
+   *  supported by the token contract
+   * @param tokenAddress The contract address of the token being approved
+   * @param accountAddress The user's wallet address
+   * @param proxyAddress Address of the user's proxy contract. If not provided,
+   *  will attempt to fetch it from Wyvern.
+   * @param tokenAbi ABI of the token's contract. Defaults to a flexible ERC-721
+   *  contract.
+   * @param skipApproveAllIfTokenAddressIn an optional list of token addresses that, if a token is approve-all type, will skip approval
+   * @param schemaName The Wyvern schema name corresponding to the asset type
+   * @returns Transaction hash if a new transaction was created, otherwise null
+   */
+  public async prysmApproveSemiOrNonFungibleToken({
+    tokenId,
+    tokenAddress,
+    accountAddress,
+    proxyAddress,
+    tokenAbi = ERC721,
+    skipApproveAllIfTokenAddressIn = new Set(),
+    schemaName = WyvernSchemaName.ERC721,
+  }: {
+    tokenId: string;
+    tokenAddress: string;
+    accountAddress: string;
+    proxyAddress?: string;
+    tokenAbi?: PartialReadonlyContractAbi;
+    skipApproveAllIfTokenAddressIn?: Set<string>;
+    schemaName?: WyvernSchemaName;
+  }): Promise<NotSubmittedTransaction | null> {
+    const schema = this._getSchema(schemaName);
+    this.logger(
+      `Approving token ${tokenId} for ${accountAddress} and schema ${schema}`
+    );
+    const tokenContract = this.web3.eth.contract(
+      tokenAbi as Web3.AbiDefinition[]
+    );
+    const contract = await tokenContract.at(tokenAddress);
+
+    if (!proxyAddress) {
+      proxyAddress = (await this._getProxy(accountAddress)) || undefined;
+      if (!proxyAddress) {
+        throw new Error("Uninitialized account");
+      }
+    }
+
+    const approvalAllCheck = async () => {
+      // NOTE:
+      // Use this long way of calling so we can check for method existence on a bool-returning method.
+      const isApprovedForAllRaw = await rawCall(this.web3ReadOnly, {
+        from: accountAddress,
+        to: contract.address,
+        data: contract.isApprovedForAll.getData(accountAddress, proxyAddress),
+      });
+      return parseInt(isApprovedForAllRaw);
+    };
+    const isApprovedForAll = await approvalAllCheck();
+
+    if (isApprovedForAll == 1) {
+      // Supports ApproveAll
+      this.logger("Already approved proxy for all tokens");
+      return null;
+    }
+
+    if (isApprovedForAll == 0) {
+      // Supports ApproveAll
+      //  not approved for all yet
+
+      if (skipApproveAllIfTokenAddressIn.has(tokenAddress)) {
+        this.logger(
+          "Already approving proxy for all tokens in another transaction"
+        );
+        return null;
+      }
+      skipApproveAllIfTokenAddressIn.add(tokenAddress);
+
+      try {
+        this._dispatch(EventType.ApproveAllAssets, {
+          accountAddress,
+          proxyAddress,
+          contractAddress: tokenAddress,
+        });
+
+        const gasEstimateRes = await contract.setApprovalForAll.estimateGas(
+          proxyAddress,
+          true
+        );
+
+        return {
+          from: accountAddress,
+          to: contract.address,
+          method: "setApprovalForAll",
+          callData: contract.setApprovalForAll.getData(proxyAddress, true),
+          abi: tokenAbi,
+          gasEstimate: gasEstimateRes,
+        };
+      } catch (error) {
+        console.error(error);
+        throw new Error(
+          "Couldn't get permission to approve these tokens for trading. Their contract might not be implemented correctly. Please contact the developer!"
+        );
+      }
+    }
+
+    // Does not support ApproveAll (ERC721 v1 or v2)
+    const msg =
+      "Contract does not support Approve All. Contract Unsupported by Prysm at this time.";
+    this.logger(msg);
+    throw new Error(msg);
+    // todo later!
+    /*
+    const approvalOneCheck = async () => {
+      // Note: approvedAddr will be '0x' if not supported
+      let approvedAddr = await promisifyCall<string>((c) =>
+        contract.getApproved.call(tokenId, c)
+      );
+      if (approvedAddr == proxyAddress) {
+        this.logger("Already approved proxy for this token");
+        return true;
+      }
+      this.logger(`Approve response: ${approvedAddr}`);
+
+      // SPECIAL CASING non-compliant contracts
+      if (!approvedAddr) {
+        approvedAddr = await getNonCompliantApprovalAddress(
+          contract,
+          tokenId,
+          accountAddress
+        );
+        if (approvedAddr == proxyAddress) {
+          this.logger("Already approved proxy for this item");
+          return true;
+        }
+        this.logger(`Special-case approve response: ${approvedAddr}`);
+      }
+      return false;
+    };
+
+    const isApprovedForOne = await approvalOneCheck();
+    if (isApprovedForOne) {
+      return null;
+    }
+
+    // Call `approve`
+
+    try {
+      this._dispatch(EventType.ApproveAsset, {
+        accountAddress,
+        proxyAddress,
+        asset: getWyvernAsset(schema, { tokenId, tokenAddress }),
+      });
+
+      const txHash = await sendRawTransaction(
+        this.web3,
+        {
+          from: accountAddress,
+          to: contract.address,
+          data: contract.approve.getData(proxyAddress, tokenId),
+        },
+        (error) => {
+          this._dispatch(EventType.TransactionDenied, {
+            error,
+            accountAddress,
+          });
+        }
+      );
+
+      await this._confirmTransaction(
+        txHash,
+        EventType.ApproveAsset,
+        "Approving single token for trading",
+        approvalOneCheck
+      );
+      return txHash;
+    } catch (error) {
+      console.error(error);
+      throw new Error(
+        "Couldn't get permission to approve this token for trading. Its contract might not be implemented correctly. Please contact the developer!"
+      );
+    }
+    */
   }
 
   /**
@@ -1630,7 +1824,7 @@ export class OpenSeaPort {
     tokenAddress: string;
     proxyAddress?: string;
     minimumAmount?: BigNumber;
-  }): Promise<{ callData: string; from: string; to: string } | null> {
+  }): Promise<NotSubmittedTransaction | null> {
     proxyAddress =
       proxyAddress ||
       WyvernProtocol.getTokenTransferProxyAddress(this._networkName);
@@ -1662,11 +1856,14 @@ export class OpenSeaPort {
 
     if (minimumAmount.greaterThan(0) && hasOldApproveMethod) {
       // Older erc20s require initial approval to be 0
-      await this.unapproveFungibleToken({
-        accountAddress,
-        tokenAddress,
-        proxyAddress,
-      });
+      throw new Error(
+        "Prysm Squads cannot approve fungible token with old approve method"
+      );
+      // await this.unapproveFungibleToken({
+      //   accountAddress,
+      //   tokenAddress,
+      //   proxyAddress,
+      // });
     }
 
     return {
@@ -1678,6 +1875,9 @@ export class OpenSeaPort {
       ),
       from: accountAddress,
       to: tokenAddress,
+      abi: ERC20,
+      method: "approve",
+      gasEstimate: undefined,
     };
   }
 
@@ -2603,7 +2803,9 @@ export class OpenSeaPort {
    * Internal method exposed for dev flexibility.
    * @param accountAddress The user's wallet address
    */
-  public async prysmInitializeProxy(accountAddress: string) {
+  public async prysmInitializeProxy(
+    accountAddress: string
+  ): Promise<NotSubmittedTransaction> {
     this._dispatch(EventType.InitializeAccount, { accountAddress });
     this.logger(`Initializing proxy for account: ${accountAddress}`);
 
@@ -2618,6 +2820,7 @@ export class OpenSeaPort {
       method: "registerProxy",
       callData: undefined,
       gasEstimate: this._correctGasAmount(gasEstimate),
+      abi: proxyRegistryABI as PartialReadonlyContractAbi,
     };
     // const transactionHash =
     //   await this._wyvernProtocol.wyvernProxyRegistry.registerProxy.sendTransactionAsync(
@@ -3553,6 +3756,7 @@ export class OpenSeaPort {
   }
 
   // Throws
+  // Call this until it returns null
   public async prysmSellOrderValidationAndApprovals({
     order,
     accountAddress,
@@ -3574,18 +3778,29 @@ export class OpenSeaPort {
         : [];
     const tokenAddress = order.paymentToken;
 
-    await this._approveAll({ schemaNames, wyAssets, accountAddress });
+    const needsApproval = await this.prysmApproveAll({
+      schemaNames,
+      wyAssets,
+      accountAddress,
+    });
+    if (needsApproval) {
+      // could be  token approval, or nft approval
+      return needsApproval;
+    }
 
     // For fulfilling bids,
     // need to approve access to fungible token because of the way fees are paid
     // This can be done at a higher level to show UI
     if (tokenAddress != NULL_ADDRESS) {
       const minimumAmount = makeBigNumber(order.basePrice);
-      await this.approveFungibleToken({
+      const ftApprove = await this.prysmApproveFungibleToken({
         accountAddress,
         tokenAddress,
         minimumAmount,
       });
+      if (ftApprove) {
+        return ftApprove;
+      }
     }
 
     // Check sell parameters
@@ -3626,6 +3841,7 @@ export class OpenSeaPort {
         `Failed to validate sell order parameters. Make sure you're on the right network!`
       );
     }
+    return null;
   }
 
   /**
@@ -3915,7 +4131,7 @@ export class OpenSeaPort {
     wyAssets: WyvernAsset[];
     accountAddress: string;
     proxyAddress?: string;
-  }) {
+  }): Promise<NotSubmittedTransaction | null> {
     proxyAddress =
       proxyAddress || (await this._getProxy(accountAddress)) || undefined;
     if (!proxyAddress) {
@@ -3923,71 +4139,71 @@ export class OpenSeaPort {
     }
     const contractsWithApproveAll: Set<string> = new Set();
 
-    return Promise.all(
-      wyAssets.map(async (wyAsset, i) => {
-        const schemaName = schemaNames[i];
-        // Verify that the taker owns the asset
-        let isOwner;
-        try {
-          isOwner = await this._ownsAssetOnChain({
+    for (let i = 0; i < wyAssets.length; i++) {
+      const wyAsset = wyAssets[i];
+      const schemaName = schemaNames[i];
+      // Verify that the taker owns the asset
+      let isOwner;
+      try {
+        isOwner = await this._ownsAssetOnChain({
+          accountAddress,
+          proxyAddress,
+          wyAsset,
+          schemaName,
+        });
+      } catch (error) {
+        // let it through for assets we don't support yet
+        isOwner = true;
+      }
+      if (!isOwner) {
+        const minAmount = "quantity" in wyAsset ? wyAsset.quantity : 1;
+        console.error(
+          `Failed on-chain ownership check: ${accountAddress} on ${schemaName}:`,
+          wyAsset
+        );
+        throw new Error(
+          `You don't own enough to do that (${minAmount} base units of ${
+            wyAsset.address
+          }${wyAsset.id ? " token " + wyAsset.id : ""})`
+        );
+      }
+      switch (schemaName) {
+        case WyvernSchemaName.ERC721:
+        case WyvernSchemaName.ERC721v3:
+        case WyvernSchemaName.ERC1155:
+        case WyvernSchemaName.LegacyEnjin:
+        case WyvernSchemaName.ENSShortNameAuction:
+          // Handle NFTs and SFTs
+          // eslint-disable-next-line no-case-declarations
+          const wyNFTAsset = wyAsset as WyvernNFTAsset;
+          return await this.prysmApproveSemiOrNonFungibleToken({
+            tokenId: wyNFTAsset.id.toString(),
+            tokenAddress: wyNFTAsset.address,
             accountAddress,
             proxyAddress,
-            wyAsset,
             schemaName,
+            skipApproveAllIfTokenAddressIn: contractsWithApproveAll,
           });
-        } catch (error) {
-          // let it through for assets we don't support yet
-          isOwner = true;
-        }
-        if (!isOwner) {
-          const minAmount = "quantity" in wyAsset ? wyAsset.quantity : 1;
-          console.error(
-            `Failed on-chain ownership check: ${accountAddress} on ${schemaName}:`,
-            wyAsset
-          );
-          throw new Error(
-            `You don't own enough to do that (${minAmount} base units of ${
-              wyAsset.address
-            }${wyAsset.id ? " token " + wyAsset.id : ""})`
-          );
-        }
-        switch (schemaName) {
-          case WyvernSchemaName.ERC721:
-          case WyvernSchemaName.ERC721v3:
-          case WyvernSchemaName.ERC1155:
-          case WyvernSchemaName.LegacyEnjin:
-          case WyvernSchemaName.ENSShortNameAuction:
-            // Handle NFTs and SFTs
-            // eslint-disable-next-line no-case-declarations
-            const wyNFTAsset = wyAsset as WyvernNFTAsset;
-            return await this.approveSemiOrNonFungibleToken({
-              tokenId: wyNFTAsset.id.toString(),
-              tokenAddress: wyNFTAsset.address,
-              accountAddress,
-              proxyAddress,
-              schemaName,
-              skipApproveAllIfTokenAddressIn: contractsWithApproveAll,
-            });
-          case WyvernSchemaName.ERC20:
-            // Handle FTs
+        case WyvernSchemaName.ERC20:
+          // Handle FTs
 
-            throw new Error("ERC20 not supported for Squads");
+          throw new Error("ERC20 not supported for Squads");
 
-          // For other assets, including contracts:
-          // Send them to the user's proxy
-          // if (where != WyvernAssetLocation.Proxy) {
-          //   return this.transferOne({
-          //     schemaName: schema.name,
-          //     asset: wyAsset,
-          //     isWyvernAsset: true,
-          //     fromAddress: accountAddress,
-          //     toAddress: proxy
-          //   })
-          // }
-          // return true
-        }
-      })
-    );
+        // For other assets, including contracts:
+        // Send them to the user's proxy
+        // if (where != WyvernAssetLocation.Proxy) {
+        //   return this.transferOne({
+        //     schemaName: schema.name,
+        //     asset: wyAsset,
+        //     isWyvernAsset: true,
+        //     fromAddress: accountAddress,
+        //     toAddress: proxy
+        //   })
+        // }
+        // return true
+      }
+    }
+    return null;
   }
 
   // Throws

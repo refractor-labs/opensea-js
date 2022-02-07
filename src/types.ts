@@ -729,3 +729,13 @@ interface PartialAbiDefinition {
   stateMutability?: Web3.ConstructorStateMutability | string;
 }
 export type PartialReadonlyContractAbi = Array<Readonly<PartialAbiDefinition>>;
+
+export interface NotSubmittedTransaction {
+  from: string;
+  to: string;
+  method: string;
+  callData: string | undefined;
+  value?: string;
+  gasEstimate?: number;
+  abi: PartialReadonlyContractAbi;
+}
