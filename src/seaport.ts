@@ -4,9 +4,9 @@ import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import Web3 from "web3";
 import { WyvernProtocol } from "wyvern-js";
-import { proxyRegistryABI } from "wyvern-js/src/utils/proxyRegistryABI";
 import * as WyvernSchemas from "wyvern-schemas";
 import { Schema } from "wyvern-schemas/dist/types";
+import { proxyRegistryABI } from "./abi/ProxyRegistryAbi";
 import { OpenSeaAPI } from "./api";
 import {
   CHEEZE_WIZARDS_BASIC_TOURNAMENT_ADDRESS,
