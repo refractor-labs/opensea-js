@@ -6,6 +6,7 @@ import Web3 from "web3";
 import { WyvernProtocol } from "wyvern-js";
 import * as WyvernSchemas from "wyvern-schemas";
 import { Schema } from "wyvern-schemas/dist/types";
+import { proxyRegistryABI } from "./abi/ProxyRegistryAbi";
 import { OpenSeaAPI } from "./api";
 import {
   CHEEZE_WIZARDS_BASIC_TOURNAMENT_ADDRESS,
@@ -1189,7 +1190,6 @@ export class OpenSeaPort {
    * @param referrerAddress The optional address that referred the order
    * @returns Transaction hash for fulfilling the order
    */
-
   public async prysmFulfillOrder({
     order,
     accountAddress,
@@ -4993,6 +4993,9 @@ export class OpenSeaPort {
     let value;
     let shouldValidateBuy = true;
     let shouldValidateSell = true;
+    const exchange =
+      (await this._getOrderCreateWyvernExchangeAddress()) ||
+      WyvernProtocol.getExchangeContractAddress(this._networkName);
 
     if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
       // USER IS THE SELLER, only validate the buy order
@@ -5146,7 +5149,7 @@ export class OpenSeaPort {
       args[9].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
       args[10],
     ];
-    return { args: argsPrysm, txnData };
+    return { args: argsPrysm, txnData, to: exchange };
   }
 
   private async _getRequiredAmountForTakingSellOrder(sell: Order) {
@@ -5395,7 +5398,31 @@ export class OpenSeaPort {
     return useReadOnly ? this._wyvernProtocolReadOnly : this._wyvernProtocol;
   }
 
+  public prysmGetWyvernProtocolForOrder(order: Order, useReadOnly?: boolean) {
+    if (
+      order.exchange ===
+      wyvern2_2ConfigByNetwork[this._networkName].wyvernExchangeContractAddress
+    ) {
+      return useReadOnly
+        ? this._wyvern2_2ProtocolReadOnly
+        : this._wyvern2_2Protocol;
+    }
+    return useReadOnly ? this._wyvernProtocolReadOnly : this._wyvernProtocol;
+  }
+
   private _getWyvernTokenTransferProxyAddressForOrder(order: Order) {
+    return (
+      (order.exchange ===
+      wyvern2_2ConfigByNetwork[this._networkName].wyvernExchangeContractAddress
+        ? wyvern2_2ConfigByNetwork[this._networkName]
+            .wyvernTokenTransferProxyContractAddress
+        : this._wyvernConfigOverride
+            ?.wyvernTokenTransferProxyContractAddress) ||
+      WyvernProtocol.getTokenTransferProxyAddress(this._networkName)
+    );
+  }
+
+  public prysmGetWyvernTokenTransferProxyAddressForOrder(order: Order) {
     return (
       (order.exchange ===
       wyvern2_2ConfigByNetwork[this._networkName].wyvernExchangeContractAddress
