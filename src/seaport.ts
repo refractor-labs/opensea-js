@@ -5022,13 +5022,14 @@ export class OpenSeaPort {
       // User is neither - matching service
     }
 
-    await this._validateMatch({
+    const validateMatch = await this._validateMatch({
       buy,
       sell,
       accountAddress,
       shouldValidateBuy,
       shouldValidateSell,
     });
+    this.logger("validateMatch: " + validateMatch);
 
     this._dispatch(EventType.MatchOrders, {
       buy,
@@ -5107,14 +5108,14 @@ export class OpenSeaPort {
     try {
       const prot = (wyvernProtocolReadOnly as unknown as any)?.wyvernExchange
         ?.web3ContractInstance?.address;
-      console.log("wyvernProtocolReadOnly", wyvernProtocolReadOnly);
-      console.log(
-        "atomic match exchange address is",
-        prot,
-        "EXCHANGE address is ",
-        exchange,
-        "buy.exchange is",
-        buy.exchange
+      this.logger("wyvernProtocolReadOnly" + wyvernProtocolReadOnly);
+      this.logger(
+        "atomic match exchange address is" +
+          prot +
+          " EXCHANGE address is " +
+          exchange +
+          " buy.exchange is " +
+          buy.exchange
       );
       // Typescript splat doesn't typecheck
       const gasEstimate =
