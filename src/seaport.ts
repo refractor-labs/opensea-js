@@ -5105,6 +5105,15 @@ export class OpenSeaPort {
 
     // Estimate gas first
     try {
+      console.log(
+        "atomic match exchange address is",
+        (wyvernProtocolReadOnly as unknown as any)?.wyvernExchange
+          ?.web3ContractInstance?.address,
+        "EXCHANGE address is ",
+        exchange,
+        "buy.exchange is",
+        buy.exchange
+      );
       // Typescript splat doesn't typecheck
       const gasEstimate =
         await wyvernProtocolReadOnly.wyvernExchange.atomicMatch_.estimateGasAsync(
