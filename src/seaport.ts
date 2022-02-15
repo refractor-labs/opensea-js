@@ -5105,10 +5105,12 @@ export class OpenSeaPort {
 
     // Estimate gas first
     try {
+      const prot = (wyvernProtocolReadOnly as unknown as any)?.wyvernExchange
+        ?.web3ContractInstance?.address;
+      console.log("wyvernProtocolReadOnly", wyvernProtocolReadOnly);
       console.log(
         "atomic match exchange address is",
-        (wyvernProtocolReadOnly as unknown as any)?.wyvernExchange
-          ?.web3ContractInstance?.address,
+        prot,
         "EXCHANGE address is ",
         exchange,
         "buy.exchange is",
