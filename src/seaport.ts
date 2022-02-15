@@ -4996,6 +4996,7 @@ export class OpenSeaPort {
     const exchange =
       (await this._getOrderCreateWyvernExchangeAddress()) ||
       WyvernProtocol.getExchangeContractAddress(this._networkName);
+    const wyvernProtocolReadOnly = this._getWyvernProtocolForOrder(buy, true);
 
     if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
       // USER IS THE SELLER, only validate the buy order
@@ -5106,7 +5107,7 @@ export class OpenSeaPort {
     try {
       // Typescript splat doesn't typecheck
       const gasEstimate =
-        await this._wyvernProtocolReadOnly.wyvernExchange.atomicMatch_.estimateGasAsync(
+        await wyvernProtocolReadOnly.wyvernExchange.atomicMatch_.estimateGasAsync(
           args[0],
           args[1],
           args[2],
