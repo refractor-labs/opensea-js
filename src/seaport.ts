@@ -5162,7 +5162,7 @@ export class OpenSeaPort {
       args[9].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
       args[10],
     ];
-    return { args: argsPrysm, txnData, to: exchange };
+    return { args: argsPrysm, txnData, to: buy.exchange };
   }
 
   private async _getRequiredAmountForTakingSellOrder(sell: Order) {
