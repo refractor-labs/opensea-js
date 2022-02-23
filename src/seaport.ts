@@ -2865,14 +2865,15 @@ export class OpenSeaPort {
    * @param accountAddress The user's wallet address
    */
   public async prysmInitializeProxy(
-    accountAddress: string
+    accountAddress: string,
+    wyvernProtocol = this._wyvernProtocol
   ): Promise<NotSubmittedTransaction> {
     this._dispatch(EventType.InitializeAccount, { accountAddress });
     this.logger(`Initializing proxy for account: ${accountAddress}`);
 
     const txnData = { from: accountAddress };
     const gasEstimate =
-      await this._wyvernProtocolReadOnly.wyvernProxyRegistry.registerProxy.estimateGasAsync(
+      await wyvernProtocol.wyvernProxyRegistry.registerProxy.estimateGasAsync(
         txnData
       );
     this.logger(`Prysm Gas estimate: ${gasEstimate}`);
@@ -3892,10 +3893,13 @@ export class OpenSeaPort {
         : [];
     const tokenAddress = order.paymentToken;
 
+    const wyvernProtocol = this._getWyvernProtocolForOrder(order);
+
     const needsApproval = await this.prysmApproveAll({
       schemaNames,
       wyAssets,
       accountAddress,
+      wyvernProtocol,
     });
     if (needsApproval) {
       // could be  token approval, or nft approval
@@ -4214,16 +4218,20 @@ export class OpenSeaPort {
     wyAssets,
     accountAddress,
     proxyAddress,
+    wyvernProtocol = this._wyvernProtocol,
   }: {
     schemaNames: WyvernSchemaName[];
     wyAssets: WyvernAsset[];
     accountAddress: string;
     proxyAddress?: string;
+    wyvernProtocol?: WyvernProtocol;
   }): Promise<NotSubmittedTransaction | null> {
     proxyAddress =
-      proxyAddress || (await this._getProxy(accountAddress)) || undefined;
+      proxyAddress ||
+      (await this._getProxy(accountAddress, 0, wyvernProtocol)) ||
+      undefined;
     if (!proxyAddress) {
-      return await this.prysmInitializeProxy(accountAddress);
+      return await this.prysmInitializeProxy(accountAddress, wyvernProtocol);
     }
     const contractsWithApproveAll: Set<string> = new Set();
 
