@@ -3901,29 +3901,37 @@ export class OpenSeaPort {
       accountAddress,
       wyvernProtocol,
     });
-    if (needsApproval) {
-      // could be  token approval, or nft approval
-      return needsApproval;
-    }
+    // if (needsApproval) {
+    //   // could be  token approval, or nft approval
+    //   return needsApproval;
+    // }
 
     // For fulfilling bids,
     // need to approve access to fungible token because of the way fees are paid
     // This can be done at a higher level to show UI
+    let ftApprove: NotSubmittedTransaction | null = null;
     if (tokenAddress != NULL_ADDRESS) {
       const minimumAmount = makeBigNumber(order.basePrice);
-      const ftApprove = await this.prysmApproveFungibleToken({
+      ftApprove = await this.prysmApproveFungibleToken({
         accountAddress,
         tokenAddress,
         minimumAmount,
       });
-      if (ftApprove) {
-        return ftApprove;
+    }
+    if (needsApproval || ftApprove) {
+      const out: NotSubmittedTransaction[] = [];
+      if (needsApproval) {
+        out.push(needsApproval);
       }
+      if (ftApprove) {
+        out.push(ftApprove);
+      }
+      return out;
     }
 
     // Check sell parameters
     const sellValid =
-      await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
+      await wyvernProtocol.wyvernExchange.validateOrderParameters_.callAsync(
         [
           order.exchange,
           order.maker,
@@ -5422,15 +5430,7 @@ export class OpenSeaPort {
   }
 
   public prysmGetWyvernProtocolForOrder(order: Order, useReadOnly?: boolean) {
-    if (
-      order.exchange ===
-      wyvern2_2ConfigByNetwork[this._networkName].wyvernExchangeContractAddress
-    ) {
-      return useReadOnly
-        ? this._wyvern2_2ProtocolReadOnly
-        : this._wyvern2_2Protocol;
-    }
-    return useReadOnly ? this._wyvernProtocolReadOnly : this._wyvernProtocol;
+    return this._getWyvernProtocolForOrder(order, useReadOnly);
   }
 
   private _getWyvernTokenTransferProxyAddressForOrder(order: Order) {
