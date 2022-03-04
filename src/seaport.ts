@@ -2872,6 +2872,7 @@ export class OpenSeaPort {
     this.logger(`Initializing proxy for account: ${accountAddress}`);
 
     const txnData = { from: accountAddress };
+
     const gasEstimate =
       await wyvernProtocol.wyvernProxyRegistry.registerProxy.estimateGasAsync(
         txnData
@@ -2881,7 +2882,8 @@ export class OpenSeaPort {
       ...txnData,
       to: WyvernProtocol.getProxyRegistryContractAddress(this._networkName),
       method: "registerProxy",
-      callData: undefined,
+      callData:
+        wyvernProtocol.wyvernProxyRegistry.registerProxy.getABIEncodedTransactionData(),
       gasEstimate: this._correctGasAmount(gasEstimate),
       abi: proxyRegistryABI as PartialReadonlyContractAbi,
     };
@@ -3878,7 +3880,7 @@ export class OpenSeaPort {
   }: {
     order: UnhashedOrder;
     accountAddress: string;
-  }) {
+  }): Promise<NotSubmittedTransaction[] | null> {
     const wyAssets =
       "bundle" in order.metadata
         ? order.metadata.bundle.assets
@@ -5213,6 +5215,92 @@ export class OpenSeaPort {
   ): Promise<(ECSignature & { nonce?: number }) | null> {
     const signerAddress = order.maker;
 
+    this._dispatch(EventType.CreateOrder, {
+      order,
+      accountAddress: order.maker,
+    });
+
+    try {
+      // 2.2 Sign order flow
+      if (
+        order.exchange ===
+          wyvern2_2ConfigByNetwork[this._networkName]
+            .wyvernExchangeContractAddress &&
+        order.hash
+      ) {
+        const message = order.hash;
+
+        return await personalSignAsync(this.web3, message, signerAddress);
+      }
+
+      // 2.3 Sign order flow using EIP-712
+      const signerOrderNonce = await this.getNonce(signerAddress);
+
+      // We need to manually specify each field because OS orders can contain unrelated data
+      const orderForSigning: RawWyvernOrderJSON = {
+        maker: order.maker,
+        exchange: order.exchange,
+        taker: order.taker,
+        makerRelayerFee: order.makerRelayerFee.toString(),
+        takerRelayerFee: order.takerRelayerFee.toString(),
+        makerProtocolFee: order.makerProtocolFee.toString(),
+        takerProtocolFee: order.takerProtocolFee.toString(),
+        feeRecipient: order.feeRecipient,
+        feeMethod: order.feeMethod,
+        side: order.side,
+        saleKind: order.saleKind,
+        target: order.target,
+        howToCall: order.howToCall,
+        calldata: order.calldata,
+        replacementPattern: order.replacementPattern,
+        staticTarget: order.staticTarget,
+        staticExtradata: order.staticExtradata,
+        paymentToken: order.paymentToken,
+        basePrice: order.basePrice.toString(),
+        extra: order.extra.toString(),
+        listingTime: order.listingTime.toString(),
+        expirationTime: order.expirationTime.toString(),
+        salt: order.salt.toString(),
+      };
+
+      // We don't JSON.stringify as certain wallet providers sanitize this data
+      // https://github.com/coinbase/coinbase-wallet-sdk/issues/60
+      const message = {
+        types: EIP_712_ORDER_TYPES,
+        domain: {
+          name: EIP_712_WYVERN_DOMAIN_NAME,
+          version: EIP_712_WYVERN_DOMAIN_VERSION,
+          chainId: this._networkName == Network.Main ? 1 : 4,
+          verifyingContract: order.exchange,
+        },
+        primaryType: "Order",
+        message: { ...orderForSigning, nonce: signerOrderNonce.toNumber() },
+      };
+
+      const ecSignature = await signTypedDataAsync(
+        this.web3,
+        message,
+        signerAddress
+      );
+      return { ...ecSignature, nonce: signerOrderNonce.toNumber() };
+    } catch (error) {
+      this._dispatch(EventType.OrderDenied, {
+        order,
+        accountAddress: signerAddress,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Generate the signature for authorizing an order
+   * @param order Unsigned wyvern order
+   * @returns order signature in the form of v, r, s, also an optional nonce
+   */
+  public async pAuthorizeOrder(
+    order: UnsignedOrder,
+    signerAddress: string
+  ): Promise<(ECSignature & { nonce?: number }) | null> {
     this._dispatch(EventType.CreateOrder, {
       order,
       accountAddress: order.maker,
