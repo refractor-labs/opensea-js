@@ -1332,30 +1332,6 @@ export class OpenSeaPort {
   }
 
   /**
-   * Cancel all existing orders with a lower nonce on-chain, preventing them from ever being fulfilled.
-   * @param param0 __namedParameters Object
-   * @param accountAddress The order maker's wallet address
-   */
-  public async bulkCancelExistingOrders({
-    accountAddress,
-  }: {
-    accountAddress: string;
-  }) {
-    this._dispatch(EventType.BulkCancelExistingOrders, { accountAddress });
-
-    const transactionHash =
-      await this._wyvernProtocol.wyvernExchange.incrementNonce.sendTransactionAsync(
-        { from: accountAddress }
-      );
-
-    await this._confirmTransaction(
-      transactionHash.toString(),
-      EventType.BulkCancelExistingOrders,
-      "Bulk cancelling existing orders"
-    );
-  }
-
-  /**
    * Cancel an order on-chain, preventing it from ever being fulfilled.
    * @param param0 __namedParameters Object
    * @param order The order to cancel
@@ -1390,7 +1366,7 @@ export class OpenSeaPort {
         order.listingTime,
         order.expirationTime,
         order.salt,
-      ],
+      ].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
       order.feeMethod,
       order.side,
       order.saleKind,
@@ -1403,7 +1379,80 @@ export class OpenSeaPort {
       order.s || NULL_BLOCK_HASH,
     ];
 
-    return { from: accountAddress, calldataArgs: args };
+    return {
+      from: accountAddress,
+      to: WyvernProtocol.getExchangeContractAddress(this._networkName),
+      calldataArgs: args,
+    };
+
+    // const transactionHash =
+    //   await wyvernProtocol.wyvernExchange.cancelOrder_.sendTransactionAsync(
+    //     [
+    //       order.exchange,
+    //       order.maker,
+    //       order.taker,
+    //       order.feeRecipient,
+    //       order.target,
+    //       order.staticTarget,
+    //       order.paymentToken,
+    //     ],
+    //     [
+    //       order.makerRelayerFee,
+    //       order.takerRelayerFee,
+    //       order.makerProtocolFee,
+    //       order.takerProtocolFee,
+    //       order.basePrice,
+    //       order.extra,
+    //       order.listingTime,
+    //       order.expirationTime,
+    //       order.salt,
+    //     ].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+    //     order.feeMethod,
+    //     order.side,
+    //     order.saleKind,
+    //     order.howToCall,
+    //     order.calldata,
+    //     order.replacementPattern,
+    //     order.staticExtradata,
+    //     order.v || 0,
+    //     order.r || NULL_BLOCK_HASH,
+    //     order.s || NULL_BLOCK_HASH,
+    //     { from: accountAddress }
+    //   );
+    //
+    // await this._confirmTransaction(
+    //   transactionHash.toString(),
+    //   EventType.CancelOrder,
+    //   "Cancelling order",
+    //   async () => {
+    //     const isOpen = await this._validateOrder(order);
+    //     return !isOpen;
+    //   }
+    // );
+  }
+
+  /**
+   * Cancel all existing orders with a lower nonce on-chain, preventing them from ever being fulfilled.
+   * @param param0 __namedParameters Object
+   * @param accountAddress The order maker's wallet address
+   */
+  public async bulkCancelExistingOrders({
+    accountAddress,
+  }: {
+    accountAddress: string;
+  }) {
+    this._dispatch(EventType.BulkCancelExistingOrders, { accountAddress });
+
+    const transactionHash =
+      await this._wyvernProtocol.wyvernExchange.incrementNonce.sendTransactionAsync(
+        { from: accountAddress }
+      );
+
+    await this._confirmTransaction(
+      transactionHash.toString(),
+      EventType.BulkCancelExistingOrders,
+      "Bulk cancelling existing orders"
+    );
   }
 
   /**
