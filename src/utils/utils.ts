@@ -559,7 +559,7 @@ export async function signTypedDataAsync(
 ): Promise<ECSignature> {
   if (signer) {
     const signature = await signer._signTypedData(
-      message.domain,
+      { ...message.domain, EIP712Domain: undefined },
       message.types,
       message.message
     );
