@@ -558,9 +558,11 @@ export async function signTypedDataAsync(
   signerAddress: string
 ): Promise<ECSignature> {
   if (signer) {
+    const types = { ...message.types };
+    delete types.EIP712Domain;
     const signature = await signer._signTypedData(
       message.domain,
-      { ...message.types, EIP712Domain: undefined },
+      types,
       message.message
     );
     return parseSignatureHex(signature);
