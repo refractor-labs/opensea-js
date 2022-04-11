@@ -1,6 +1,6 @@
 import BigNumber from "bignumber.js";
 import * as ethUtil from "ethereumjs-util";
-import { Signer } from "ethers";
+import { ethers } from "ethers";
 import * as _ from "lodash";
 import * as Web3 from "web3";
 import { WyvernProtocol } from "wyvern-js";
@@ -513,7 +513,7 @@ export const orderToJSON = (order: Order): OrderJSON => {
  * @returns A signature if provider can sign, otherwise null
  */
 export async function personalSignAsync(
-  { web3, signer }: { signer?: Signer; web3?: Web3 },
+  { web3, signer }: { signer?: ethers.providers.JsonRpcSigner; web3?: Web3 },
   message: string,
   signerAddress: string
 ): Promise<ECSignature> {
@@ -553,49 +553,60 @@ export async function personalSignAsync(
  * @returns A signature if provider can sign, otherwise null
  */
 export async function signTypedDataAsync(
-  web3: Web3,
-  message: object,
+  { web3, signer }: { web3?: Web3; signer?: ethers.providers.JsonRpcSigner },
+  message: any,
   signerAddress: string
 ): Promise<ECSignature> {
-  let signature: Web3.JSONRPCResponsePayload;
-  try {
-    // Using sign typed data V4 works with a stringified message, used by browser providers i.e. Metamask
-    signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
-      web3.currentProvider.sendAsync(
-        {
-          method: "eth_signTypedData_v4",
-          params: [signerAddress, JSON.stringify(message)],
-          from: signerAddress,
-          id: new Date().getTime(),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        c
-      )
+  if (signer) {
+    const signature = await signer._signTypedData(
+      message.domain,
+      message.types,
+      message.message
     );
-  } catch {
-    // Fallback to normal sign typed data for node providers, without using stringified message
-    // https://github.com/coinbase/coinbase-wallet-sdk/issues/60
-    signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
-      web3.currentProvider.sendAsync(
-        {
-          method: "eth_signTypedData",
-          params: [signerAddress, message],
-          from: signerAddress,
-          id: new Date().getTime(),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        c
-      )
-    );
-  }
+    return parseSignatureHex(signature);
+  } else if (web3) {
+    let signature: Web3.JSONRPCResponsePayload;
+    try {
+      // Using sign typed data V4 works with a stringified message, used by browser providers i.e. Metamask
+      signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
+        web3.currentProvider.sendAsync(
+          {
+            method: "eth_signTypedData_v4",
+            params: [signerAddress, JSON.stringify(message)],
+            from: signerAddress,
+            id: new Date().getTime(),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          c
+        )
+      );
+    } catch {
+      // Fallback to normal sign typed data for node providers, without using stringified message
+      // https://github.com/coinbase/coinbase-wallet-sdk/issues/60
+      signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
+        web3.currentProvider.sendAsync(
+          {
+            method: "eth_signTypedData",
+            params: [signerAddress, message],
+            from: signerAddress,
+            id: new Date().getTime(),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          c
+        )
+      );
+    }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const error = (signature as any).error;
-  if (error) {
-    throw new Error(error);
-  }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = (signature as any).error;
+    if (error) {
+      throw new Error(error);
+    }
 
-  return parseSignatureHex(signature.result);
+    return parseSignatureHex(signature.result);
+  } else {
+    throw new Error("No signer or web3 provider");
+  }
 }
 
 /**

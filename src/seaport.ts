@@ -1,6 +1,6 @@
 import { BigNumber } from "bignumber.js";
 import { isValidAddress } from "ethereumjs-util";
-import { Signer } from "ethers";
+import { ethers } from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import Web3 from "web3";
@@ -137,7 +137,7 @@ import {
 export class OpenSeaPort {
   // Web3 instance to use
   public web3: Web3;
-  public ethersSigner?: Signer;
+  public ethersSigner?: ethers.providers.JsonRpcSigner;
   public web3ReadOnly: Web3;
   // Logger function to use when debugging
   public logger: (arg: string) => void;
@@ -172,7 +172,7 @@ export class OpenSeaPort {
     provider: Web3.Provider,
     apiConfig: OpenSeaAPIConfig = {},
     logger?: (arg: string) => void,
-    opts?: { signer: Signer }
+    opts?: { signer: ethers.providers.JsonRpcSigner }
   ) {
     // API config
     apiConfig.networkName = apiConfig.networkName || Network.Main;
@@ -5335,7 +5335,7 @@ export class OpenSeaPort {
       };
 
       const ecSignature = await signTypedDataAsync(
-        this.web3,
+        { web3: this.web3, signer: this.ethersSigner },
         message,
         signerAddress
       );
@@ -5425,7 +5425,7 @@ export class OpenSeaPort {
       };
 
       const ecSignature = await signTypedDataAsync(
-        this.web3,
+        { web3: this.web3, signer: this.ethersSigner },
         message,
         signerAddress
       );
