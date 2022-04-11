@@ -2,6 +2,10 @@
   <img src="https://storage.googleapis.com/opensea-static/opensea-js-logo-updated.png" />
 </p>
 
+### Requirements:
+
+v14.18.0 npm 6.14.15
+
 # OpenSea.js <!-- omit in toc -->
 
 [![https://badges.frapsoft.com/os/mit/mit.svg?v=102](https://badges.frapsoft.com/os/mit/mit.svg?v=102)](https://opensource.org/licenses/MIT)

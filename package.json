@@ -1,6 +1,6 @@
 {
   "name": "@refractor-labs/opensea-js",
-  "version": "2.0.1-prysm.7",
+  "version": "2.0.1-prysm.8",
   "description": "JavaScript SDK for the OpenSea marketplace. Let users buy or sell crypto collectibles and other cryptogoods, all on your own site!",
   "license": "MIT",
   "author": "OpenSea Developers",
@@ -34,6 +34,7 @@
     "bignumber.js": "^4.1.0",
     "ethereumjs-abi": "git+https://github.com/ProjectWyvern/ethereumjs-abi.git",
     "ethereumjs-util": "^5.2.0",
+    "ethers": "^5.6.2",
     "fbemitter": "2.1.1",
     "isomorphic-unfetch": "^2.1.1",
     "lodash": "^4.17.21",

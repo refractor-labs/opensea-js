@@ -1,5 +1,6 @@
 import { BigNumber } from "bignumber.js";
 import { isValidAddress } from "ethereumjs-util";
+import { Signer } from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import Web3 from "web3";
@@ -136,6 +137,7 @@ import {
 export class OpenSeaPort {
   // Web3 instance to use
   public web3: Web3;
+  public ethersSigner?: Signer;
   public web3ReadOnly: Web3;
   // Logger function to use when debugging
   public logger: (arg: string) => void;
@@ -169,7 +171,8 @@ export class OpenSeaPort {
   constructor(
     provider: Web3.Provider,
     apiConfig: OpenSeaAPIConfig = {},
-    logger?: (arg: string) => void
+    logger?: (arg: string) => void,
+    opts?: { signer: Signer }
   ) {
     // API config
     apiConfig.networkName = apiConfig.networkName || Network.Main;
@@ -189,6 +192,7 @@ export class OpenSeaPort {
     this.web3ReadOnly = useReadOnlyProvider
       ? new Web3(readonlyProvider)
       : this.web3;
+    this.ethersSigner = opts?.signer;
 
     // WyvernJS config
     this._wyvernProtocol = new WyvernProtocol(provider, {
@@ -5279,7 +5283,11 @@ export class OpenSeaPort {
       ) {
         const message = order.hash;
 
-        return await personalSignAsync(this.web3, message, signerAddress);
+        return await personalSignAsync(
+          { web3: this.web3 },
+          message,
+          signerAddress
+        );
       }
 
       // 2.3 Sign order flow using EIP-712
@@ -5365,7 +5373,11 @@ export class OpenSeaPort {
       ) {
         const message = order.hash;
 
-        return await personalSignAsync(this.web3, message, signerAddress);
+        return await personalSignAsync(
+          { signer: this.ethersSigner },
+          message,
+          signerAddress
+        );
       }
 
       // 2.3 Sign order flow using EIP-712

@@ -1,5 +1,6 @@
 import BigNumber from "bignumber.js";
 import * as ethUtil from "ethereumjs-util";
+import { Signer } from "ethers";
 import * as _ from "lodash";
 import * as Web3 from "web3";
 import { WyvernProtocol } from "wyvern-js";
@@ -512,30 +513,36 @@ export const orderToJSON = (order: Order): OrderJSON => {
  * @returns A signature if provider can sign, otherwise null
  */
 export async function personalSignAsync(
-  web3: Web3,
+  { web3, signer }: { signer?: Signer; web3?: Web3 },
   message: string,
   signerAddress: string
 ): Promise<ECSignature> {
-  const signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
-    web3.currentProvider.sendAsync(
-      {
-        method: "personal_sign",
-        params: [message, signerAddress],
-        from: signerAddress,
-        id: new Date().getTime(),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      c
-    )
-  );
+  if (web3) {
+    const signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
+      web3.currentProvider.sendAsync(
+        {
+          method: "personal_sign",
+          params: [message, signerAddress],
+          from: signerAddress,
+          id: new Date().getTime(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+        c
+      )
+    );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const error = (signature as any).error;
-  if (error) {
-    throw new Error(error);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = (signature as any).error;
+    if (error) {
+      throw new Error(error);
+    }
+
+    return parseSignatureHex(signature.result);
+  } else if (signer) {
+    return parseSignatureHex(await signer.signMessage(message));
+  } else {
+    throw new Error("No signer or web3 provider");
   }
-
-  return parseSignatureHex(signature.result);
 }
 
 /**
