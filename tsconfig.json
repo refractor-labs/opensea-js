@@ -28,6 +28,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "baseUrl": ".",
+    "strictNullChecks": false,
     "paths": {
       "buffer": ["./buffer-override.d.ts"]
     }

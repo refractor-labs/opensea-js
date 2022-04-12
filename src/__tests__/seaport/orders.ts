@@ -713,7 +713,7 @@ suite("seaport: orders", () => {
     const takerAddress = ALEX_ADDRESS_2;
     const amountInEth = 0.012;
 
-    const tokenId = null;
+    const tokenId:string|null = null;
     const tokenAddress = daiAddress;
     const expirationTime = Math.round(Date.now() / 1000 + 60 * 60 * 24);
 

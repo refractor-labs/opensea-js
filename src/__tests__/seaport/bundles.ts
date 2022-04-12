@@ -73,7 +73,7 @@ const assetsForBundleOrderERC721v3 = [
 const fungibleAssetsForBundleOrder = [
   {
     tokenAddress: BENZENE_ADDRESS,
-    tokenId: null,
+    tokenId: null as unknown as any,
     schemaName: WyvernSchemaName.ERC20,
     quantity: 20,
   },

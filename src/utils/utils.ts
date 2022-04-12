@@ -508,6 +508,7 @@ export const orderToJSON = (order: Order): OrderJSON => {
 /**
  * Sign messages using web3 personal signatures
  * @param web3 Web3 instance
+ * @param signer
  * @param message message to sign
  * @param signerAddress web3 address signing the message
  * @returns A signature if provider can sign, otherwise null
@@ -567,7 +568,7 @@ export async function signTypedDataAsync(
     );
     return parseSignatureHex(signature);
   } else if (web3) {
-    let signature: Web3.JSONRPCResponsePayload;
+    let signature: JsonRpcResponse | undefined;
     try {
       // Using sign typed data V4 works with a stringified message, used by browser providers i.e. Metamask
       signature = await promisify<JsonRpcResponse | undefined>((c) =>

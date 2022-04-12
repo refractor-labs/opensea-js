@@ -20,7 +20,7 @@ export const proxyAssertABI = {
     { name: "calldata", type: "bytes" },
   ],
   name: "proxyAssert",
-  outputs: [],
+  outputs: []  as unknown as any,
   payable: false,
   stateMutability: "nonpayable",
   type: "function",
