@@ -206,7 +206,7 @@ export const proxyRegistryABI = [
     type: "function",
   },
   {
-    inputs: [],
+    inputs: [] as unknown as any,
     payable: false,
     stateMutability: "nonpayable",
     type: "constructor",
