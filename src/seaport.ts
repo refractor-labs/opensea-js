@@ -2092,39 +2092,132 @@ export class OpenSeaPort {
    * @param order The order to calculate the price for
    */
   public async getCurrentPrice(order: Order) {
-    const wyvernProtocolReadOnly = this._getWyvernProtocolForOrder(order);
+    // const wyvernProtocolReadOnly = this._getWyvernProtocolForOrder(order);
 
-    const currentPrice =
-      await wyvernProtocolReadOnly.wyvernExchange.calculateCurrentPrice_.callAsync(
-        [
-          order.exchange,
-          order.maker,
-          order.taker,
-          order.feeRecipient,
-          order.target,
-          order.staticTarget,
-          order.paymentToken,
+    const partialAbi = new ethers.utils.Interface([
+      {
+        constant: true,
+        inputs: [
+          {
+            name: "addrs",
+            type: "address[7]",
+          },
+          {
+            name: "uints",
+            type: "uint256[9]",
+          },
+          {
+            name: "feeMethod",
+            type: "uint8",
+          },
+          {
+            name: "side",
+            type: "uint8",
+          },
+          {
+            name: "saleKind",
+            type: "uint8",
+          },
+          {
+            name: "howToCall",
+            type: "uint8",
+          },
+          {
+            name: "calldata",
+            type: "bytes",
+          },
+          {
+            name: "replacementPattern",
+            type: "bytes",
+          },
+          {
+            name: "staticExtradata",
+            type: "bytes",
+          },
         ],
-        [
-          order.makerRelayerFee,
-          order.takerRelayerFee,
-          order.makerProtocolFee,
-          order.takerProtocolFee,
-          order.basePrice,
-          order.extra,
-          order.listingTime,
-          order.expirationTime,
-          order.salt,
+        name: "calculateCurrentPrice_",
+        outputs: [
+          {
+            name: "",
+            type: "uint256",
+          },
         ],
-        order.feeMethod,
-        order.side,
-        order.saleKind,
-        order.howToCall,
-        order.calldata,
-        order.replacementPattern,
-        order.staticExtradata
-      );
-    return currentPrice;
+        payable: false,
+        stateMutability: "view",
+        type: "function",
+      },
+    ]);
+
+    const address = WyvernProtocol.getExchangeContractAddress(
+      this._networkName
+    );
+    const contract = new ethers.Contract(
+      address,
+      partialAbi,
+      this.ethersProvider
+    );
+    const currentPrice = await contract.calculateCurrentPrice_(
+      [
+        order.exchange,
+        order.maker,
+        order.taker,
+        order.feeRecipient,
+        order.target,
+        order.staticTarget,
+        order.paymentToken,
+      ],
+      [
+        order.makerRelayerFee,
+        order.takerRelayerFee,
+        order.makerProtocolFee,
+        order.takerProtocolFee,
+        order.basePrice,
+        order.extra,
+        order.listingTime,
+        order.expirationTime,
+        order.salt,
+      ],
+      order.feeMethod,
+      order.side,
+      order.saleKind,
+      order.howToCall,
+      order.calldata,
+      order.replacementPattern,
+      order.staticExtradata
+    );
+    return new BigNumber(currentPrice.toString());
+
+    // const currentPrice =
+    //   await wyvernProtocolReadOnly.wyvernExchange.calculateCurrentPrice_.callAsync(
+    //     [
+    //       order.exchange,
+    //       order.maker,
+    //       order.taker,
+    //       order.feeRecipient,
+    //       order.target,
+    //       order.staticTarget,
+    //       order.paymentToken,
+    //     ],
+    //     [
+    //       order.makerRelayerFee,
+    //       order.takerRelayerFee,
+    //       order.makerProtocolFee,
+    //       order.takerProtocolFee,
+    //       order.basePrice,
+    //       order.extra,
+    //       order.listingTime,
+    //       order.expirationTime,
+    //       order.salt,
+    //     ],
+    //     order.feeMethod,
+    //     order.side,
+    //     order.saleKind,
+    //     order.howToCall,
+    //     order.calldata,
+    //     order.replacementPattern,
+    //     order.staticExtradata
+    //   );
+    // return currentPrice;
   }
 
   /**
