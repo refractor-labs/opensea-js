@@ -98,16 +98,6 @@ import {
   WyvernSchemaName,
 } from "./types";
 import {
-  encodeAtomicizedBuy,
-  encodeAtomicizedSell,
-  encodeAtomicizedTransfer,
-  encodeBuy,
-  encodeCall,
-  encodeProxyCall,
-  encodeSell,
-  encodeTransferCall,
-} from "./utils/schema";
-import {
   annotateERC20TransferABI,
   annotateERC721TransferABI,
   assignOrdersToSides,
@@ -132,7 +122,17 @@ import {
   signTypedDataAsync,
   validateAndFormatWalletAddress,
   wyvern2_2ConfigByNetwork,
-} from "./utils/utils";
+} from "./utils";
+import {
+  encodeAtomicizedBuy,
+  encodeAtomicizedSell,
+  encodeAtomicizedTransfer,
+  encodeBuy,
+  encodeCall,
+  encodeProxyCall,
+  encodeSell,
+  encodeTransferCall,
+} from "./utils/schema";
 
 export class OpenSeaPort {
   // Web3 instance to use
@@ -4400,10 +4400,12 @@ export class OpenSeaPort {
     order,
     counterOrder,
     accountAddress,
+    useEthers = false,
   }: {
     order: UnhashedOrder;
     counterOrder?: Order;
     accountAddress: string;
+    useEthers?: boolean;
   }) {
     const tokenAddress = order.paymentToken;
 
@@ -4446,11 +4448,72 @@ export class OpenSeaPort {
       });
     }
 
-    const wyvernProtocolReadOnly = this._getWyvernProtocolForOrder(order);
+    let buyValid = false;
+    if (useEthers) {
+      // Check order formation
+      const partialAbi = new ethers.utils.Interface([
+        {
+          constant: true,
+          inputs: [
+            {
+              name: "addrs",
+              type: "address[7]",
+            },
+            {
+              name: "uints",
+              type: "uint256[9]",
+            },
+            {
+              name: "feeMethod",
+              type: "uint8",
+            },
+            {
+              name: "side",
+              type: "uint8",
+            },
+            {
+              name: "saleKind",
+              type: "uint8",
+            },
+            {
+              name: "howToCall",
+              type: "uint8",
+            },
+            {
+              name: "calldata",
+              type: "bytes",
+            },
+            {
+              name: "replacementPattern",
+              type: "bytes",
+            },
+            {
+              name: "staticExtradata",
+              type: "bytes",
+            },
+          ],
+          name: "validateOrderParameters_",
+          outputs: [
+            {
+              name: "",
+              type: "bool",
+            },
+          ],
+          payable: false,
+          stateMutability: "view",
+          type: "function",
+        },
+      ]);
 
-    // Check order formation
-    const buyValid =
-      await wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
+      const address = WyvernProtocol.getExchangeContractAddress(
+        this._networkName
+      );
+      const contract = new ethers.Contract(
+        address,
+        partialAbi,
+        this.ethersProvider
+      );
+      buyValid = !!(await contract.validateOrderParameters_(
         [
           order.exchange,
           order.maker,
@@ -4477,9 +4540,41 @@ export class OpenSeaPort {
         order.howToCall,
         order.calldata,
         order.replacementPattern,
-        order.staticExtradata,
-        { from: accountAddress }
-      );
+        order.staticExtradata
+      ));
+    } else {
+      buyValid =
+        await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
+          [
+            order.exchange,
+            order.maker,
+            order.taker,
+            order.feeRecipient,
+            order.target,
+            order.staticTarget,
+            order.paymentToken,
+          ],
+          [
+            order.makerRelayerFee,
+            order.takerRelayerFee,
+            order.makerProtocolFee,
+            order.takerProtocolFee,
+            order.basePrice,
+            order.extra,
+            order.listingTime,
+            order.expirationTime,
+            order.salt,
+          ],
+          order.feeMethod,
+          order.side,
+          order.saleKind,
+          order.howToCall,
+          order.calldata,
+          order.replacementPattern,
+          order.staticExtradata,
+          { from: accountAddress }
+        );
+    }
     if (!buyValid) {
       console.error(order);
       throw new Error(
