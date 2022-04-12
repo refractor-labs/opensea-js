@@ -1,6 +1,6 @@
 import { BigNumber } from "bignumber.js";
 import { isValidAddress } from "ethereumjs-util";
-import { ethers } from "ethers";
+import { Contract, ethers } from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import Web3 from "web3";
@@ -138,6 +138,7 @@ export class OpenSeaPort {
   // Web3 instance to use
   public web3: Web3;
   public ethersSigner?: ethers.providers.JsonRpcSigner;
+  public ethersProvider?: ethers.providers.JsonRpcProvider;
   public web3ReadOnly: Web3;
   // Logger function to use when debugging
   public logger: (arg: string) => void;
@@ -172,7 +173,10 @@ export class OpenSeaPort {
     provider: Web3.Provider,
     apiConfig: OpenSeaAPIConfig = {},
     logger?: (arg: string) => void,
-    opts?: { signer: ethers.providers.JsonRpcSigner }
+    opts?: {
+      signer: ethers.providers.JsonRpcSigner;
+      provider: ethers.providers.JsonRpcProvider;
+    }
   ) {
     // API config
     apiConfig.networkName = apiConfig.networkName || Network.Main;
@@ -193,6 +197,7 @@ export class OpenSeaPort {
       ? new Web3(readonlyProvider)
       : this.web3;
     this.ethersSigner = opts?.signer;
+    this.ethersProvider = opts?.provider;
 
     // WyvernJS config
     this._wyvernProtocol = new WyvernProtocol(provider, {
@@ -1508,14 +1513,23 @@ export class OpenSeaPort {
     }
 
     const approvalAllCheck = async () => {
+      const nftContract = new Contract(
+        contract.address,
+        new ethers.utils.Interface(ERC721),
+        this.ethersProvider
+      );
       // NOTE:
       // Use this long way of calling so we can check for method existence on a bool-returning method.
-      const isApprovedForAllRaw = await rawCall(this.web3ReadOnly, {
-        from: accountAddress,
-        to: contract.address,
-        data: contract.isApprovedForAll.getData(accountAddress, proxyAddress),
-      });
-      return parseInt(isApprovedForAllRaw);
+      // const isApprovedForAllRaw = await rawCall(this.web3ReadOnly, {
+      //   from: accountAddress,
+      //   to: contract.address,
+      //   data: contract.isApprovedForAll.getData(accountAddress, proxyAddress),
+      // });
+      this.logger("pizza approve all check");
+      return (await nftContract.isApprovedForAll(accountAddress, proxyAddress))
+        ? 1
+        : 0;
+      // return parseInt(isApprovedForAllRaw);
     };
     const isApprovedForAll = await approvalAllCheck();
 
@@ -1706,14 +1720,22 @@ export class OpenSeaPort {
     }
 
     const approvalAllCheck = async () => {
+      const nftContract = new Contract(
+        contract.address,
+        new ethers.utils.Interface(ERC721),
+        this.ethersProvider
+      );
       // NOTE:
       // Use this long way of calling so we can check for method existence on a bool-returning method.
-      const isApprovedForAllRaw = await rawCall(this.web3ReadOnly, {
-        from: accountAddress,
-        to: contract.address,
-        data: contract.isApprovedForAll.getData(accountAddress, proxyAddress),
-      });
-      return parseInt(isApprovedForAllRaw);
+      // const isApprovedForAllRaw = await rawCall(this.web3ReadOnly, {
+      //   from: accountAddress,
+      //   to: contract.address,
+      //   data: contract.isApprovedForAll.getData(accountAddress, proxyAddress),
+      // });
+      return (await nftContract.isApprovedForAll(accountAddress, proxyAddress))
+        ? 1
+        : 0;
+      // return parseInt(isApprovedForAllRaw);
     };
     const isApprovedForAll = await approvalAllCheck();
 
@@ -2993,15 +3015,23 @@ export class OpenSeaPort {
     const addressToApprove =
       proxyAddress ||
       WyvernProtocol.getTokenTransferProxyAddress(this._networkName);
-    const approved = await rawCall(this.web3, {
-      from: accountAddress,
-      to: tokenAddress,
-      data: encodeCall(getMethod(ERC20, "allowance"), [
-        accountAddress,
-        addressToApprove,
-      ]),
-    });
-    return makeBigNumber(approved);
+
+    const erc20 = new Contract(
+      tokenAddress,
+      new ethers.utils.Interface(ERC20),
+      this.ethersProvider
+    );
+    const approved = await erc20.allowance(accountAddress, addressToApprove);
+    // const approved = await rawCall(this.web3, {
+    //   from: accountAddress,
+    //   to: tokenAddress,
+    //   data: encodeCall(getMethod(ERC20, "allowance"), [
+    //     accountAddress,
+    //     addressToApprove,
+    //   ]),
+    // });
+    // return makeBigNumber(approved);
+    return new BigNumber(approved.toString());
   }
 
   public async _makeBuyOrder({
