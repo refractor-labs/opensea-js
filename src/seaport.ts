@@ -4400,12 +4400,10 @@ export class OpenSeaPort {
     order,
     counterOrder,
     accountAddress,
-    useEthers = false,
   }: {
     order: UnhashedOrder;
     counterOrder?: Order;
     accountAddress: string;
-    useEthers?: boolean;
   }) {
     const tokenAddress = order.paymentToken;
 
@@ -4446,6 +4444,100 @@ export class OpenSeaPort {
         minimumAmount,
         proxyAddress: tokenTransferProxyAddress,
       });
+    }
+
+    let buyValid = false;
+
+    buyValid =
+      await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
+        [
+          order.exchange,
+          order.maker,
+          order.taker,
+          order.feeRecipient,
+          order.target,
+          order.staticTarget,
+          order.paymentToken,
+        ],
+        [
+          order.makerRelayerFee,
+          order.takerRelayerFee,
+          order.makerProtocolFee,
+          order.takerProtocolFee,
+          order.basePrice,
+          order.extra,
+          order.listingTime,
+          order.expirationTime,
+          order.salt,
+        ],
+        order.feeMethod,
+        order.side,
+        order.saleKind,
+        order.howToCall,
+        order.calldata,
+        order.replacementPattern,
+        order.staticExtradata,
+        { from: accountAddress }
+      );
+
+    if (!buyValid) {
+      console.error(order);
+      throw new Error(
+        `Failed to validate buy order parameters. Make sure you're on the right network!`
+      );
+    }
+  }
+
+  // Throws
+  public async prysmBuyOrderValidationAndApprovals({
+    order,
+    counterOrder,
+    accountAddress,
+    useEthers,
+  }: {
+    order: UnhashedOrder;
+    counterOrder?: Order;
+    accountAddress: string;
+    useEthers?: boolean;
+  }) {
+    const tokenAddress = order.paymentToken;
+
+    if (tokenAddress != NULL_ADDRESS) {
+      const balance = await this.getTokenBalance({
+        accountAddress,
+        tokenAddress,
+      });
+
+      /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
+      let minimumAmount = makeBigNumber(order.basePrice);
+      if (counterOrder) {
+        minimumAmount = await this._getRequiredAmountForTakingSellOrder(
+          counterOrder
+        );
+      }
+
+      // Check WETH balance
+      if (balance.toNumber() < minimumAmount.toNumber()) {
+        if (
+          tokenAddress ==
+          WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
+        ) {
+          throw new Error("Insufficient balance. You may need to wrap Ether.");
+        } else {
+          throw new Error("Insufficient balance.");
+        }
+      }
+
+      // Check token approval
+      // This can be done at a higher level to show UI
+      const needsApprovalCalldata = await this.prysmApproveFungibleToken({
+        accountAddress,
+        tokenAddress,
+        minimumAmount,
+      });
+      if (needsApprovalCalldata) {
+        return needsApprovalCalldata;
+      }
     }
 
     let buyValid = false;
@@ -4575,96 +4667,6 @@ export class OpenSeaPort {
           { from: accountAddress }
         );
     }
-    if (!buyValid) {
-      console.error(order);
-      throw new Error(
-        `Failed to validate buy order parameters. Make sure you're on the right network!`
-      );
-    }
-  }
-
-  // Throws
-  public async prysmBuyOrderValidationAndApprovals({
-    order,
-    counterOrder,
-    accountAddress,
-  }: {
-    order: UnhashedOrder;
-    counterOrder?: Order;
-    accountAddress: string;
-  }) {
-    const tokenAddress = order.paymentToken;
-
-    if (tokenAddress != NULL_ADDRESS) {
-      const balance = await this.getTokenBalance({
-        accountAddress,
-        tokenAddress,
-      });
-
-      /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
-      let minimumAmount = makeBigNumber(order.basePrice);
-      if (counterOrder) {
-        minimumAmount = await this._getRequiredAmountForTakingSellOrder(
-          counterOrder
-        );
-      }
-
-      // Check WETH balance
-      if (balance.toNumber() < minimumAmount.toNumber()) {
-        if (
-          tokenAddress ==
-          WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
-        ) {
-          throw new Error("Insufficient balance. You may need to wrap Ether.");
-        } else {
-          throw new Error("Insufficient balance.");
-        }
-      }
-
-      // Check token approval
-      // This can be done at a higher level to show UI
-      const needsApprovalCalldata = await this.prysmApproveFungibleToken({
-        accountAddress,
-        tokenAddress,
-        minimumAmount,
-      });
-      if (needsApprovalCalldata) {
-        return needsApprovalCalldata;
-      }
-    }
-
-    // Check order formation
-    const buyValid =
-      await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
-        [
-          order.exchange,
-          order.maker,
-          order.taker,
-          order.feeRecipient,
-          order.target,
-          order.staticTarget,
-          order.paymentToken,
-        ],
-        [
-          order.makerRelayerFee,
-          order.takerRelayerFee,
-          order.makerProtocolFee,
-          order.takerProtocolFee,
-          order.basePrice,
-          order.extra,
-          order.listingTime,
-          order.expirationTime,
-          order.salt,
-        ],
-        order.feeMethod,
-        order.side,
-        order.saleKind,
-        order.howToCall,
-        order.calldata,
-        order.replacementPattern,
-        order.staticExtradata,
-        { from: accountAddress }
-      );
     if (!buyValid) {
       console.error(order);
       throw new Error(
