@@ -1,5 +1,5 @@
 {
-  "name": "opensea-js",
+  "name": "@refractor-labs/opensea-js",
   "version": "3.0.2-prysm.1",
   "description": "JavaScript SDK for the OpenSea marketplace. Let users buy or sell crypto collectibles and other cryptogoods, all on your own site!",
   "license": "MIT",
