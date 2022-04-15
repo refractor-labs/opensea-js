@@ -1,6 +1,6 @@
 import { BigNumber } from "bignumber.js";
 import { isValidAddress } from "ethereumjs-util";
-import { Contract, ethers } from "ethers";
+import { Contract, ethers, BigNumber as BigNumberEthers } from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import Web3 from "web3";
@@ -1204,11 +1204,13 @@ export class OpenSeaPort {
     accountAddress,
     recipientAddress,
     referrerAddress,
+    useEthers = false,
   }: {
     order: Order;
     accountAddress: string;
     recipientAddress?: string;
     referrerAddress?: string;
+    useEthers?: boolean;
   }) {
     const matchingOrder = this._makeMatchingOrder({
       order,
@@ -1224,6 +1226,7 @@ export class OpenSeaPort {
       sell,
       accountAddress,
       metadata,
+      useEthers,
     });
 
     // await this._confirmTransaction(
@@ -2091,133 +2094,139 @@ export class OpenSeaPort {
    * Gets the price for the order using the contract
    * @param order The order to calculate the price for
    */
-  public async getCurrentPrice(order: Order) {
-    // const wyvernProtocolReadOnly = this._getWyvernProtocolForOrder(order);
+  public async getCurrentPrice(order: Order, useEthers = false) {
+    if (useEthers) {
+      const partialAbi = new ethers.utils.Interface([
+        {
+          constant: true,
+          inputs: [
+            {
+              name: "addrs",
+              type: "address[7]",
+            },
+            {
+              name: "uints",
+              type: "uint256[9]",
+            },
+            {
+              name: "feeMethod",
+              type: "uint8",
+            },
+            {
+              name: "side",
+              type: "uint8",
+            },
+            {
+              name: "saleKind",
+              type: "uint8",
+            },
+            {
+              name: "howToCall",
+              type: "uint8",
+            },
+            {
+              name: "calldata",
+              type: "bytes",
+            },
+            {
+              name: "replacementPattern",
+              type: "bytes",
+            },
+            {
+              name: "staticExtradata",
+              type: "bytes",
+            },
+          ],
+          name: "calculateCurrentPrice_",
+          outputs: [
+            {
+              name: "",
+              type: "uint256",
+            },
+          ],
+          payable: false,
+          stateMutability: "view",
+          type: "function",
+        },
+      ]);
 
-    const partialAbi = new ethers.utils.Interface([
-      {
-        constant: true,
-        inputs: [
-          {
-            name: "addrs",
-            type: "address[7]",
-          },
-          {
-            name: "uints",
-            type: "uint256[9]",
-          },
-          {
-            name: "feeMethod",
-            type: "uint8",
-          },
-          {
-            name: "side",
-            type: "uint8",
-          },
-          {
-            name: "saleKind",
-            type: "uint8",
-          },
-          {
-            name: "howToCall",
-            type: "uint8",
-          },
-          {
-            name: "calldata",
-            type: "bytes",
-          },
-          {
-            name: "replacementPattern",
-            type: "bytes",
-          },
-          {
-            name: "staticExtradata",
-            type: "bytes",
-          },
+      const address = WyvernProtocol.getExchangeContractAddress(
+        this._networkName
+      );
+      if (!this.ethersProvider) {
+        throw new Error("missing ethers provider");
+      }
+      const contract = new ethers.Contract(
+        address,
+        partialAbi,
+        this.ethersProvider
+      );
+      const currentPrice = await contract.calculateCurrentPrice_(
+        [
+          order.exchange,
+          order.maker,
+          order.taker,
+          order.feeRecipient,
+          order.target,
+          order.staticTarget,
+          order.paymentToken,
         ],
-        name: "calculateCurrentPrice_",
-        outputs: [
-          {
-            name: "",
-            type: "uint256",
-          },
+        [
+          order.makerRelayerFee,
+          order.takerRelayerFee,
+          order.makerProtocolFee,
+          order.takerProtocolFee,
+          order.basePrice,
+          order.extra,
+          order.listingTime,
+          order.expirationTime,
+          order.salt,
+        ].map((bn) =>
+          BigNumberEthers.from(bn ? bn.toFixed(0, BigNumber.ROUND_FLOOR) : 0)
+        ),
+        order.feeMethod,
+        order.side,
+        order.saleKind,
+        order.howToCall,
+        order.calldata,
+        order.replacementPattern,
+        order.staticExtradata
+      );
+      this.logger("Current price is: " + currentPrice?.toString());
+      console.log("Current price is:", currentPrice?.toString());
+      return new BigNumber(currentPrice?.toString());
+    }
+    const currentPrice =
+      await this._wyvernProtocolReadOnly.wyvernExchange.calculateCurrentPrice_.callAsync(
+        [
+          order.exchange,
+          order.maker,
+          order.taker,
+          order.feeRecipient,
+          order.target,
+          order.staticTarget,
+          order.paymentToken,
         ],
-        payable: false,
-        stateMutability: "view",
-        type: "function",
-      },
-    ]);
-
-    const address = WyvernProtocol.getExchangeContractAddress(
-      this._networkName
-    );
-    const contract = new ethers.Contract(
-      address,
-      partialAbi,
-      this.ethersProvider
-    );
-    const currentPrice = await contract.calculateCurrentPrice_(
-      [
-        order.exchange,
-        order.maker,
-        order.taker,
-        order.feeRecipient,
-        order.target,
-        order.staticTarget,
-        order.paymentToken,
-      ],
-      [
-        order.makerRelayerFee,
-        order.takerRelayerFee,
-        order.makerProtocolFee,
-        order.takerProtocolFee,
-        order.basePrice,
-        order.extra,
-        order.listingTime,
-        order.expirationTime,
-        order.salt,
-      ],
-      order.feeMethod,
-      order.side,
-      order.saleKind,
-      order.howToCall,
-      order.calldata,
-      order.replacementPattern,
-      order.staticExtradata
-    );
-    return new BigNumber(currentPrice.toString());
-
-    // const currentPrice =
-    //   await wyvernProtocolReadOnly.wyvernExchange.calculateCurrentPrice_.callAsync(
-    //     [
-    //       order.exchange,
-    //       order.maker,
-    //       order.taker,
-    //       order.feeRecipient,
-    //       order.target,
-    //       order.staticTarget,
-    //       order.paymentToken,
-    //     ],
-    //     [
-    //       order.makerRelayerFee,
-    //       order.takerRelayerFee,
-    //       order.makerProtocolFee,
-    //       order.takerProtocolFee,
-    //       order.basePrice,
-    //       order.extra,
-    //       order.listingTime,
-    //       order.expirationTime,
-    //       order.salt,
-    //     ],
-    //     order.feeMethod,
-    //     order.side,
-    //     order.saleKind,
-    //     order.howToCall,
-    //     order.calldata,
-    //     order.replacementPattern,
-    //     order.staticExtradata
-    //   );
-    // return currentPrice;
+        [
+          order.makerRelayerFee,
+          order.takerRelayerFee,
+          order.makerProtocolFee,
+          order.takerProtocolFee,
+          order.basePrice,
+          order.extra,
+          order.listingTime,
+          order.expirationTime,
+          order.salt,
+        ],
+        order.feeMethod,
+        order.side,
+        order.saleKind,
+        order.howToCall,
+        order.calldata,
+        order.replacementPattern,
+        order.staticExtradata
+      );
+    return currentPrice;
   }
 
   /**
@@ -2945,13 +2954,22 @@ export class OpenSeaPort {
    */
   public async _getProxy(
     accountAddress: string,
-    retries = 0,
-    wyvernProtocol = this._wyvernProtocolReadOnly
+    retries = 0
+    // wyvernProtocol = this._wyvernProtocolReadOnly
   ): Promise<string | null> {
-    let proxyAddress: string | null =
-      await wyvernProtocol.wyvernProxyRegistry.proxies.callAsync(
-        accountAddress
-      );
+    const tokenproxy = new ethers.utils.Interface([
+      "function proxies(address a) public view returns(address proxy)",
+    ]);
+    const contract = new Contract(
+      WyvernProtocol.getProxyRegistryContractAddress(this._networkName),
+      tokenproxy,
+      this.ethersProvider
+    );
+
+    let proxyAddress: string | null = await contract.proxies(accountAddress);
+    // await wyvernProtocol.wyvernProxyRegistry.proxies.callAsync(
+    //   accountAddress
+    // );
 
     if (proxyAddress == "0x") {
       throw new Error(
@@ -3004,8 +3022,8 @@ export class OpenSeaPort {
       async () => {
         const polledProxy = await this._getProxy(
           accountAddress,
-          0,
-          wyvernProtocol
+          0
+          // wyvernProtocol
         );
         return !!polledProxy;
       }
@@ -3013,8 +3031,8 @@ export class OpenSeaPort {
 
     const proxyAddress = await this._getProxy(
       accountAddress,
-      10,
-      wyvernProtocol
+      10
+      // wyvernProtocol
     );
     if (!proxyAddress) {
       throw new Error(
@@ -4053,9 +4071,11 @@ export class OpenSeaPort {
   public async prysmSellOrderValidationAndApprovals({
     order,
     accountAddress,
+    userEthers = false,
   }: {
     order: UnhashedOrder;
     accountAddress: string;
+    useEthers?: boolean;
   }): Promise<NotSubmittedTransaction[] | null> {
     const wyAssets =
       "bundle" in order.metadata
@@ -4108,37 +4128,42 @@ export class OpenSeaPort {
     }
 
     // Check sell parameters
-    const sellValid =
-      await wyvernProtocol.wyvernExchange.validateOrderParameters_.callAsync(
-        [
-          order.exchange,
-          order.maker,
-          order.taker,
-          order.feeRecipient,
-          order.target,
-          order.staticTarget,
-          order.paymentToken,
-        ],
-        [
-          order.makerRelayerFee,
-          order.takerRelayerFee,
-          order.makerProtocolFee,
-          order.takerProtocolFee,
-          order.basePrice,
-          order.extra,
-          order.listingTime,
-          order.expirationTime,
-          order.salt,
-        ],
-        order.feeMethod,
-        order.side,
-        order.saleKind,
-        order.howToCall,
-        order.calldata,
-        order.replacementPattern,
-        order.staticExtradata,
-        { from: accountAddress }
-      );
+    let sellValid = false;
+    if (userEthers) {
+      sellValid = await this._validateOrderParameters(order);
+    } else {
+      sellValid =
+        await wyvernProtocol.wyvernExchange.validateOrderParameters_.callAsync(
+          [
+            order.exchange,
+            order.maker,
+            order.taker,
+            order.feeRecipient,
+            order.target,
+            order.staticTarget,
+            order.paymentToken,
+          ],
+          [
+            order.makerRelayerFee,
+            order.takerRelayerFee,
+            order.makerProtocolFee,
+            order.takerProtocolFee,
+            order.basePrice,
+            order.extra,
+            order.listingTime,
+            order.expirationTime,
+            order.salt,
+          ],
+          order.feeMethod,
+          order.side,
+          order.saleKind,
+          order.howToCall,
+          order.calldata,
+          order.replacementPattern,
+          order.staticExtradata,
+          { from: accountAddress }
+        );
+    }
     if (!sellValid) {
       console.error(order);
       throw new Error(
@@ -4240,7 +4265,7 @@ export class OpenSeaPort {
         order.listingTime,
         order.expirationTime,
         order.salt,
-      ].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      ].map((bn) => BigNumberEthers.from(bn.toFixed(0, BigNumber.ROUND_FLOOR))),
       order.feeMethod,
       order.side,
       order.saleKind,
@@ -4312,9 +4337,7 @@ export class OpenSeaPort {
     wyvernProtocol?: WyvernProtocol;
   }) {
     proxyAddress =
-      proxyAddress ||
-      (await this._getProxy(accountAddress, 0, wyvernProtocol)) ||
-      undefined;
+      proxyAddress || (await this._getProxy(accountAddress, 0)) || undefined;
     if (!proxyAddress) {
       proxyAddress = await this._initializeProxy(
         accountAddress,
@@ -4413,9 +4436,7 @@ export class OpenSeaPort {
     wyvernProtocol?: WyvernProtocol;
   }): Promise<NotSubmittedTransaction | null> {
     proxyAddress =
-      proxyAddress ||
-      (await this._getProxy(accountAddress, 0, wyvernProtocol)) ||
-      undefined;
+      proxyAddress || (await this._getProxy(accountAddress, 0)) || undefined;
     if (!proxyAddress) {
       return await this.prysmInitializeProxy(accountAddress, wyvernProtocol);
     }
@@ -4581,6 +4602,100 @@ export class OpenSeaPort {
     }
   }
 
+  public async _validateOrderParameters(order: Order) {
+    const partialAbi = new ethers.utils.Interface([
+      {
+        constant: true,
+        inputs: [
+          {
+            name: "addrs",
+            type: "address[7]",
+          },
+          {
+            name: "uints",
+            type: "uint256[9]",
+          },
+          {
+            name: "feeMethod",
+            type: "uint8",
+          },
+          {
+            name: "side",
+            type: "uint8",
+          },
+          {
+            name: "saleKind",
+            type: "uint8",
+          },
+          {
+            name: "howToCall",
+            type: "uint8",
+          },
+          {
+            name: "calldata",
+            type: "bytes",
+          },
+          {
+            name: "replacementPattern",
+            type: "bytes",
+          },
+          {
+            name: "staticExtradata",
+            type: "bytes",
+          },
+        ],
+        name: "validateOrderParameters_",
+        outputs: [
+          {
+            name: "",
+            type: "bool",
+          },
+        ],
+        payable: false,
+        stateMutability: "view",
+        type: "function",
+      },
+    ]);
+
+    const address = WyvernProtocol.getExchangeContractAddress(
+      this._networkName
+    );
+    const contract = new ethers.Contract(
+      address,
+      partialAbi,
+      this.ethersProvider
+    );
+    return !!(await contract.validateOrderParameters_(
+      [
+        order.exchange,
+        order.maker,
+        order.taker,
+        order.feeRecipient,
+        order.target,
+        order.staticTarget,
+        order.paymentToken,
+      ],
+      [
+        order.makerRelayerFee,
+        order.takerRelayerFee,
+        order.makerProtocolFee,
+        order.takerProtocolFee,
+        order.basePrice,
+        order.extra,
+        order.listingTime,
+        order.expirationTime,
+        order.salt,
+      ].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      order.feeMethod,
+      order.side,
+      order.saleKind,
+      order.howToCall,
+      order.calldata,
+      order.replacementPattern,
+      order.staticExtradata
+    ));
+  }
+
   // Throws
   public async prysmBuyOrderValidationAndApprovals({
     order,
@@ -4636,97 +4751,7 @@ export class OpenSeaPort {
     let buyValid = false;
     if (useEthers) {
       // Check order formation
-      const partialAbi = new ethers.utils.Interface([
-        {
-          constant: true,
-          inputs: [
-            {
-              name: "addrs",
-              type: "address[7]",
-            },
-            {
-              name: "uints",
-              type: "uint256[9]",
-            },
-            {
-              name: "feeMethod",
-              type: "uint8",
-            },
-            {
-              name: "side",
-              type: "uint8",
-            },
-            {
-              name: "saleKind",
-              type: "uint8",
-            },
-            {
-              name: "howToCall",
-              type: "uint8",
-            },
-            {
-              name: "calldata",
-              type: "bytes",
-            },
-            {
-              name: "replacementPattern",
-              type: "bytes",
-            },
-            {
-              name: "staticExtradata",
-              type: "bytes",
-            },
-          ],
-          name: "validateOrderParameters_",
-          outputs: [
-            {
-              name: "",
-              type: "bool",
-            },
-          ],
-          payable: false,
-          stateMutability: "view",
-          type: "function",
-        },
-      ]);
-
-      const address = WyvernProtocol.getExchangeContractAddress(
-        this._networkName
-      );
-      const contract = new ethers.Contract(
-        address,
-        partialAbi,
-        this.ethersProvider
-      );
-      buyValid = !!(await contract.validateOrderParameters_(
-        [
-          order.exchange,
-          order.maker,
-          order.taker,
-          order.feeRecipient,
-          order.target,
-          order.staticTarget,
-          order.paymentToken,
-        ],
-        [
-          order.makerRelayerFee,
-          order.takerRelayerFee,
-          order.makerProtocolFee,
-          order.takerProtocolFee,
-          order.basePrice,
-          order.extra,
-          order.listingTime,
-          order.expirationTime,
-          order.salt,
-        ],
-        order.feeMethod,
-        order.side,
-        order.saleKind,
-        order.howToCall,
-        order.calldata,
-        order.replacementPattern,
-        order.staticExtradata
-      ));
+      buyValid = await this._validateOrderParameters(order);
     } else {
       buyValid =
         await this._wyvernProtocolReadOnly.wyvernExchange.validateOrderParameters_.callAsync(
@@ -5275,11 +5300,13 @@ export class OpenSeaPort {
     sell,
     accountAddress,
     metadata = NULL_BLOCK_HASH,
+    useEthers = false,
   }: {
     buy: Order;
     sell: Order;
     accountAddress: string;
     metadata?: string;
+    useEthers?: boolean;
   }) {
     let value;
     let shouldValidateBuy = true;
@@ -5291,23 +5318,27 @@ export class OpenSeaPort {
 
     if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
       // USER IS THE SELLER, only validate the buy order
-      await this._sellOrderValidationAndApprovals({
+      await this.prysmSellOrderValidationAndApprovals({
         order: sell,
         accountAddress,
       });
       shouldValidateSell = false;
     } else if (buy.maker.toLowerCase() == accountAddress.toLowerCase()) {
       // USER IS THE BUYER, only validate the sell order
-      await this._buyOrderValidationAndApprovals({
+      await this.prysmBuyOrderValidationAndApprovals({
         order: buy,
         counterOrder: sell,
         accountAddress,
+        useEthers,
       });
       shouldValidateBuy = false;
 
       // If using ETH to pay, set the value of the transaction to the current price
       if (buy.paymentToken == NULL_ADDRESS) {
-        value = await this._getRequiredAmountForTakingSellOrder(sell);
+        value = await this._getRequiredAmountForTakingSellOrder(
+          sell,
+          useEthers
+        );
       }
     } else {
       // User is neither - matching service
@@ -5456,8 +5487,11 @@ export class OpenSeaPort {
     return { args: argsPrysm, txnData, to: buy.exchange };
   }
 
-  private async _getRequiredAmountForTakingSellOrder(sell: Order) {
-    const currentPrice = await this.getCurrentPrice(sell);
+  private async _getRequiredAmountForTakingSellOrder(
+    sell: Order,
+    useEthers = false
+  ) {
+    const currentPrice = await this.getCurrentPrice(sell, useEthers);
     const estimatedPrice = estimateCurrentPrice(sell);
 
     const maxPrice = BigNumber.max(currentPrice, estimatedPrice);
