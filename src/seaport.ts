@@ -4071,7 +4071,7 @@ export class OpenSeaPort {
   public async prysmSellOrderValidationAndApprovals({
     order,
     accountAddress,
-    userEthers = false,
+    useEthers = false,
   }: {
     order: UnhashedOrder;
     accountAddress: string;
@@ -4129,7 +4129,7 @@ export class OpenSeaPort {
 
     // Check sell parameters
     let sellValid = false;
-    if (userEthers) {
+    if (useEthers) {
       sellValid = await this._validateOrderParameters(order);
     } else {
       sellValid =
