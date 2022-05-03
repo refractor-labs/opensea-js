@@ -10,6 +10,8 @@ import { Schema } from "wyvern-schemas/dist/types";
 import { proxyRegistryABI } from "./abi/ProxyRegistryAbi";
 import { OpenSeaAPI } from "./api";
 import {
+  API_BASE_MAINNET,
+  API_BASE_RINKEBY,
   CHEEZE_WIZARDS_BASIC_TOURNAMENT_ADDRESS,
   CHEEZE_WIZARDS_BASIC_TOURNAMENT_RINKEBY_ADDRESS,
   CHEEZE_WIZARDS_GUILD_ADDRESS,
@@ -178,6 +180,18 @@ export class OpenSeaPort {
       provider: ethers.providers.JsonRpcProvider;
     }
   ) {
+    // do not proxy rcp, use original open sea rpc url
+    let rpcBaseUrl: string;
+    switch (apiConfig.networkName) {
+      case Network.Rinkeby:
+        rpcBaseUrl = API_BASE_RINKEBY;
+        break;
+      case Network.Main:
+      default:
+        rpcBaseUrl = API_BASE_MAINNET;
+        break;
+    }
+
     // API config
     apiConfig.networkName = apiConfig.networkName || Network.Main;
     this.api = new OpenSeaAPI(apiConfig);
@@ -186,7 +200,9 @@ export class OpenSeaPort {
     this._networkName = apiConfig.networkName;
 
     const readonlyProvider = new Web3.providers.HttpProvider(
-      `${this.api.apiBaseUrl}/${RPC_URL_PATH}`
+      `${
+        apiConfig.useOpenseaRpc ? rpcBaseUrl : this.api.apiBaseUrl
+      }/${RPC_URL_PATH}`
     );
 
     const useReadOnlyProvider = apiConfig.useReadOnlyProvider ?? true;
