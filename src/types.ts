@@ -1,6 +1,6 @@
 /* eslint-disable import/no-unused-modules */
 import BigNumber from "bignumber.js";
-import * as Web3 from "web3";
+import { AbiItem } from "web3-utils";
 import {
   ECSignature,
   HowToCall,
@@ -248,7 +248,7 @@ export interface OpenSeaAccount {
 
 export interface OpenSeaUser {
   // Username for this user
-  username: string;
+  username?: string;
 }
 
 /**
@@ -715,6 +715,7 @@ export interface OpenSeaAssetQuery {
   order_direction?: string;
   limit?: number;
   offset?: number;
+  cursor?: string;
 }
 
 /**
@@ -737,20 +738,7 @@ export interface OrderbookResponse {
 export type Web3Callback<T> = (err: Error | null, result: T) => void;
 export type TxnCallback = (result: boolean) => void;
 
-/**
- * To simplify typifying ABIs
- */
-interface PartialAbiDefinition {
-  type: Web3.AbiType | string;
-  name?: string;
-  inputs?: object[];
-  outputs?: object[];
-  payable?: boolean;
-  constant?: boolean;
-  anonymous?: boolean;
-  stateMutability?: Web3.ConstructorStateMutability | string;
-}
-export type PartialReadonlyContractAbi = Array<Readonly<PartialAbiDefinition>>;
+export type PartialReadonlyContractAbi = AbiItem[];
 
 export interface NotSubmittedTransaction {
   from: string;

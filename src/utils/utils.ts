@@ -1,8 +1,13 @@
 import BigNumber from "bignumber.js";
+import { AbiType, CallData, TxData } from "ethereum-types";
 import * as ethUtil from "ethereumjs-util";
 import { ethers } from "ethers";
 import * as _ from "lodash";
-import * as Web3 from "web3";
+import { ItemType } from "seaport-js/lib/constants";
+import Web3 from "web3";
+import { JsonRpcResponse } from "web3-core-helpers/types";
+import { AbstractProvider } from "web3-core/types";
+import { Contract } from "web3-eth-contract";
 import { WyvernProtocol } from "wyvern-js";
 import {
   AnnotatedFunctionABI,
@@ -16,12 +21,14 @@ import {
   ENJIN_ADDRESS,
   ENJIN_COIN_ADDRESS,
   INVERSE_BASIS_POINT,
+  MAX_EXPIRATION_MONTHS,
   MERKLE_VALIDATOR_MAINNET,
   MERKLE_VALIDATOR_RINKEBY,
   NULL_ADDRESS,
   NULL_BLOCK_HASH,
 } from "../constants";
 import { ERC1155 } from "../contracts";
+import { ERC1155Abi } from "../typechain/contracts/ERC1155Abi";
 import {
   Asset,
   AssetEvent,
@@ -74,7 +81,7 @@ export const annotateERC721TransferABI = (
   outputs: [],
   payable: false,
   stateMutability: StateMutability.Nonpayable,
-  type: Web3.AbiType.Function,
+  type: AbiType.Function,
 });
 
 export const annotateERC20TransferABI = (
@@ -105,7 +112,7 @@ export const annotateERC20TransferABI = (
   ],
   payable: false,
   stateMutability: StateMutability.Nonpayable,
-  type: Web3.AbiType.Function,
+  type: AbiType.Function,
 });
 
 // OTHER
@@ -165,20 +172,14 @@ const track = (web3: Web3, txHash: string, onFinalized: TxnCallback) => {
   } else {
     txCallbacks[txHash] = [onFinalized];
     const poll = async () => {
-      const tx = await promisify<Web3.Transaction>((c) =>
-        web3.eth.getTransaction(txHash, c)
-      );
+      const tx = await web3.eth.getTransaction(txHash);
       if (tx && tx.blockHash && tx.blockHash !== NULL_BLOCK_HASH) {
-        const receipt = await promisify<Web3.TransactionReceipt | null>((c) =>
-          web3.eth.getTransactionReceipt(txHash, c)
-        );
+        const receipt = await web3.eth.getTransactionReceipt(txHash);
         if (!receipt) {
           // Hack: assume success if no receipt
           console.warn("No receipt found for ", txHash);
         }
-        const status = receipt
-          ? parseInt((receipt.status || "0").toString()) == 1
-          : true;
+        const status = receipt.status;
         txCallbacks[txHash].map((f) => f(status));
         delete txCallbacks[txHash];
       } else {
@@ -309,7 +310,7 @@ export const userFromJSON = (user: any): OpenSeaUser => {
 export const assetBundleFromJSON = (asset_bundle: any): OpenSeaAssetBundle => {
   const fromJSON: OpenSeaAssetBundle = {
     maker: asset_bundle.maker,
-    assets: asset_bundle.assets.map(assetFromJSON),
+    assets: asset_bundle.assets ? asset_bundle.assets.map(assetFromJSON) : [],
     assetContract: asset_bundle.asset_contract
       ? assetContractFromJSON(asset_bundle.asset_contract)
       : undefined,
@@ -518,8 +519,8 @@ export async function personalSignAsync(
   signerAddress: string
 ): Promise<ECSignature> {
   if (web3) {
-    const signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
-      web3.currentProvider.sendAsync(
+    const signature = await promisify<JsonRpcResponse | undefined>((c) =>
+      (web3.currentProvider as AbstractProvider).sendAsync(
         {
           method: "personal_sign",
           params: [message, signerAddress],
@@ -537,7 +538,7 @@ export async function personalSignAsync(
       throw new Error(error);
     }
 
-    return parseSignatureHex(signature.result);
+    return parseSignatureHex(signature?.result);
   } else if (signer) {
     return parseSignatureHex(await signer.signMessage(message));
   } else {
@@ -567,11 +568,11 @@ export async function signTypedDataAsync(
     );
     return parseSignatureHex(signature);
   } else if (web3) {
-    let signature: Web3.JSONRPCResponsePayload;
+    let signature: JsonRpcResponse | undefined;
     try {
       // Using sign typed data V4 works with a stringified message, used by browser providers i.e. Metamask
-      signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
-        web3.currentProvider.sendAsync(
+      signature = await promisify<JsonRpcResponse | undefined>((c) =>
+        (web3.currentProvider as AbstractProvider).sendAsync(
           {
             method: "eth_signTypedData_v4",
             params: [signerAddress, JSON.stringify(message)],
@@ -585,8 +586,8 @@ export async function signTypedDataAsync(
     } catch {
       // Fallback to normal sign typed data for node providers, without using stringified message
       // https://github.com/coinbase/coinbase-wallet-sdk/issues/60
-      signature = await promisify<Web3.JSONRPCResponsePayload>((c) =>
-        web3.currentProvider.sendAsync(
+      signature = await promisify<JsonRpcResponse | undefined>((c) =>
+        (web3.currentProvider as AbstractProvider).sendAsync(
           {
             method: "eth_signTypedData",
             params: [signerAddress, message],
@@ -605,7 +606,7 @@ export async function signTypedDataAsync(
       throw new Error(error);
     }
 
-    return parseSignatureHex(signature.result);
+    return parseSignatureHex(signature?.result);
   } else {
     throw new Error("No signer or web3 provider");
   }
@@ -620,7 +621,7 @@ export async function isContractAddress(
   web3: Web3,
   address: string
 ): Promise<boolean> {
-  const code = await promisify<string>((c) => web3.eth.getCode(address, c));
+  const code = await web3.eth.getCode(address);
   return code !== "0x";
 }
 
@@ -651,7 +652,7 @@ export function makeBigNumber(arg: number | string | BigNumber): BigNumber {
  */
 export async function sendRawTransaction(
   web3: Web3,
-  { from, to, data, gasPrice, value = 0, gas }: Web3.TxData,
+  { from, to, data, gasPrice, value = 0, gas }: TxData,
   onError: (error: unknown) => void
 ): Promise<string> {
   if (gas == null) {
@@ -665,15 +666,15 @@ export async function sendRawTransaction(
         {
           from,
           to,
-          value,
+          value: value.toString(),
           data,
-          gas,
-          gasPrice,
+          gas: gas?.toString(),
+          gasPrice: gasPrice?.toString(),
         },
         c
       )
     );
-    return txHashRes.toString();
+    return txHashRes;
   } catch (error) {
     onError(error);
     throw error;
@@ -692,20 +693,15 @@ export async function sendRawTransaction(
  */
 export async function rawCall(
   web3: Web3,
-  { from, to, data }: Web3.CallData,
+  { from, to, data }: CallData,
   onError?: (error: unknown) => void
 ): Promise<string> {
   try {
-    const result = await promisify<string>((c) =>
-      web3.eth.call(
-        {
-          from,
-          to,
-          data,
-        },
-        c
-      )
-    );
+    const result = await web3.eth.call({
+      from,
+      to,
+      data,
+    });
     return result;
   } catch (error) {
     // Probably method not found, and web3 is a Parity node
@@ -727,19 +723,14 @@ export async function rawCall(
  */
 export async function estimateGas(
   web3: Web3,
-  { from, to, data, value = 0 }: Web3.TxData
+  { from, to, data, value = 0 }: TxData
 ): Promise<number> {
-  const amount = await promisify<number>((c) =>
-    web3.eth.estimateGas(
-      {
-        from,
-        to,
-        value,
-        data,
-      },
-      c
-    )
-  );
+  const amount = await web3.eth.estimateGas({
+    from,
+    to,
+    value: value.toString(),
+    data,
+  });
 
   return amount;
 }
@@ -749,8 +740,8 @@ export async function estimateGas(
  * @param web3 Web3 instance
  */
 export async function getCurrentGasPrice(web3: Web3): Promise<BigNumber> {
-  const meanGas = await promisify<BigNumber>((c) => web3.eth.getGasPrice(c));
-  return meanGas;
+  const gasPrice = await web3.eth.getGasPrice();
+  return new BigNumber(gasPrice);
 }
 
 /**
@@ -773,17 +764,17 @@ export async function getTransferFeeSettings(
 
   if (asset.tokenAddress.toLowerCase() == ENJIN_ADDRESS.toLowerCase()) {
     // Enjin asset
-    const feeContract = web3.eth
-      .contract(ERC1155 as Web3.AbiDefinition[])
-      .at(asset.tokenAddress);
+    const feeContract = new web3.eth.Contract(
+      ERC1155,
+      asset.tokenAddress
+    ) as unknown as ERC1155Abi;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const params = await promisifyCall<any[]>((c) =>
-      feeContract.transferSettings(asset.tokenId, { from: accountAddress }, c)
-    );
+    const params = await feeContract.methods
+      .transferSettings(asset.tokenId as string)
+      .call({ from: accountAddress });
     if (params) {
       transferFee = makeBigNumber(params[3]);
-      if (params[2] == 0) {
+      if (params[2] === "0") {
         transferFeeTokenAddress = ENJIN_COIN_ADDRESS;
       }
     }
@@ -887,7 +878,9 @@ export function estimateCurrentPrice(
     exactPrice = exactPrice.times(+takerRelayerFee / INVERSE_BASIS_POINT + 1);
   }
 
-  return shouldRoundUp ? exactPrice.ceil() : exactPrice;
+  return shouldRoundUp
+    ? exactPrice.integerValue(BigNumber.ROUND_CEIL)
+    : exactPrice;
 }
 
 /**
@@ -1038,7 +1031,7 @@ export function validateAndFormatWalletAddress(
   if (!address) {
     throw new Error("No wallet address found");
   }
-  if (!web3.isAddress(address)) {
+  if (!web3.utils.isAddress(address)) {
     throw new Error("Invalid wallet address");
   }
   if (address == NULL_ADDRESS) {
@@ -1060,22 +1053,18 @@ export function onDeprecated(msg: string) {
  * @param erc721Contract contract to check
  */
 export async function getNonCompliantApprovalAddress(
-  erc721Contract: Web3.ContractInstance,
+  erc721Contract: Contract,
   tokenId: string,
   _accountAddress: string
 ): Promise<string | undefined> {
-  const results = await Promise.all([
+  const results = await Promise.allSettled([
     // CRYPTOKITTIES check
-    promisifyCall<string>((c) =>
-      erc721Contract.kittyIndexToApproved.call(tokenId, c)
-    ),
+    erc721Contract.methods.kittyIndexToApproved(tokenId).call(),
     // Etherbots check
-    promisifyCall<string>((c) =>
-      erc721Contract.partIndexToApproved.call(tokenId, c)
-    ),
+    erc721Contract.methods.partIndexToApproved(tokenId).call(),
   ]);
 
-  return _.compact(results)[0];
+  return _.compact(results)[0].status;
 }
 
 export const merkleValidatorByNetwork = {
@@ -1083,19 +1072,38 @@ export const merkleValidatorByNetwork = {
   [Network.Rinkeby]: MERKLE_VALIDATOR_RINKEBY,
 };
 
-export const wyvern2_2ConfigByNetwork = {
-  [Network.Main]: {
-    wyvernExchangeContractAddress: "0x7be8076f4ea4a4ad08075c2508e481d6c946d12b",
-    wyvernProxyRegistryContractAddress:
-      "0xa5409ec958c83c3f309868babaca7c86dcb077c1",
-    wyvernTokenTransferProxyContractAddress:
-      "0xe5c783ee536cf5e63e792988335c4255169be4e1",
-  },
-  [Network.Rinkeby]: {
-    wyvernExchangeContractAddress: "0x5206e78b21ce315ce284fb24cf05e0585a93b1d9",
-    wyvernProxyRegistryContractAddress:
-      "0xf57b2c51ded3a29e6891aba85459d600256cf317",
-    wyvernTokenTransferProxyContractAddress:
-      "0x82d102457854c985221249f86659c9d6cf12aa72",
-  },
-} as const;
+/**
+ * The longest time that an order is valid for is six months from the current date
+ * @returns unix timestamp
+ */
+export const getMaxOrderExpirationTimestamp = () => {
+  const maxExpirationDate = new Date();
+
+  maxExpirationDate.setDate(
+    maxExpirationDate.getDate() + MAX_EXPIRATION_MONTHS
+  );
+
+  return Math.round(maxExpirationDate.getTime() / 1000);
+};
+
+interface ErrorWithCode extends Error {
+  code: string;
+}
+
+export const hasErrorCode = (error: unknown): error is ErrorWithCode => {
+  const untypedError = error as Partial<ErrorWithCode>;
+  return !!untypedError.code;
+};
+
+export const getAssetItemType = (schemaName?: WyvernSchemaName) => {
+  switch (schemaName) {
+    case "ERC20":
+      return ItemType.ERC20;
+    case "ERC721":
+      return ItemType.ERC721;
+    case "ERC1155":
+      return ItemType.ERC1155;
+    default:
+      throw new Error(`Unknown schema name: ${schemaName}`);
+  }
+};

@@ -1,7 +1,7 @@
 import BigNumber from "bignumber.js";
 import { assert } from "chai";
 import { before, suite, test } from "mocha";
-import * as Web3 from "web3";
+import Web3 from "web3";
 import {
   DEFAULT_BUYER_FEE_BASIS_POINTS,
   DEFAULT_MAX_BOUNTY,
@@ -203,7 +203,7 @@ suite("seaport: fees", () => {
   });
 
   test("First page of orders have valid fees", async () => {
-    const { orders } = await client.api.getOrders();
+    const { orders } = await client.api.getOrdersLegacyWyvern();
     assert.isNotEmpty(orders);
 
     orders.forEach((order) => {
@@ -273,7 +273,6 @@ suite("seaport: fees", () => {
       paymentTokenAddress: NULL_ADDRESS,
       extraBountyBasisPoints,
       buyerAddress: NULL_ADDRESS,
-      expirationTime: 0,
       waitForHighestBid: false,
     });
 
