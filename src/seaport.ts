@@ -1,7 +1,12 @@
 import { BigNumber } from "bignumber.js";
 import { Web3JsProvider } from "ethereum-types";
 import { isValidAddress } from "ethereumjs-util";
-import { Contract, ethers, BigNumber as BigNumberEthers } from "ethers";
+import {
+  BigNumber as BigNumberEthers,
+  Contract,
+  ethers,
+  providers,
+} from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import { Seaport } from "seaport-js";
@@ -70,14 +75,14 @@ import {
   ERC20,
   ERC721,
   getMethod,
+  StaticCheckCheezeWizards,
   StaticCheckDecentralandEstates,
   StaticCheckTxOrigin,
+  UniswapExchange,
   UniswapFactory,
   WrappedNFT,
   WrappedNFTFactory,
   WrappedNFTLiquidationProxy,
-  StaticCheckCheezeWizards,
-  UniswapExchange,
 } from "./contracts";
 import {
   MAX_ERROR_LENGTH,
@@ -129,12 +134,15 @@ import {
   delay,
   estimateCurrentPrice,
   estimateGas,
+  getAssetItemType,
   getCurrentGasPrice,
+  getMaxOrderExpirationTimestamp,
   getNonCompliantApprovalAddress,
   getOrderHash,
   getTransferFeeSettings,
   getWyvernAsset,
   getWyvernBundle,
+  hasErrorCode,
   makeBigNumber,
   merkleValidatorByNetwork,
   onDeprecated,
@@ -143,9 +151,6 @@ import {
   sendRawTransaction,
   signTypedDataAsync,
   validateAndFormatWalletAddress,
-  getMaxOrderExpirationTimestamp,
-  hasErrorCode,
-  getAssetItemType,
 } from "./utils";
 import {
   encodeAtomicizedBuy,
@@ -162,7 +167,7 @@ export class OpenSeaPort {
   // Web3 instance to use
   public web3: Web3;
   public ethersSigner?: ethers.providers.JsonRpcSigner;
-  public ethersProvider?: ethers.providers.JsonRpcProvider;
+  public ethersProviderPrysm?: ethers.providers.JsonRpcProvider;
   public web3ReadOnly: Web3;
   // Ethers provider
   public ethersProvider: providers.Web3Provider;
@@ -237,18 +242,21 @@ export class OpenSeaPort {
       ? new Web3(readonlyProvider)
       : this.web3;
     this.ethersSigner = opts?.signer;
-    this.ethersProvider = opts?.provider;
+    this.ethersProviderPrysm = opts?.provider;
 
     // Ethers Config
     this.ethersProvider = new providers.Web3Provider(
       provider as providers.ExternalProvider
     );
-    this.seaport = new Seaport(this.ethersProvider, {
-      conduitKeyToConduit: CONDUIT_KEYS_TO_CONDUIT,
-      overrides: {
-        defaultConduitKey: OPENSEA_CROSS_CHAIN_CONDUIT_KEY,
-      },
-    });
+    this.seaport = new Seaport(
+      this.ethersProviderPrysm || this.ethersProvider,
+      {
+        conduitKeyToConduit: CONDUIT_KEYS_TO_CONDUIT,
+        overrides: {
+          defaultConduitKey: OPENSEA_CROSS_CHAIN_CONDUIT_KEY,
+        },
+      }
+    );
 
     // WyvernJS config
     this._wyvernProtocol = new WyvernProtocol(provider as Web3JsProvider, {
@@ -1888,9 +1896,11 @@ export class OpenSeaPort {
 
     const approvalAllCheck = async () => {
       const nftContract = new Contract(
-        tokenContract.address,
-        new ethers.utils.Interface(ERC721),
-        this.ethersProvider
+        tokenAddress,
+        new ethers.utils.Interface(
+          ERC721 as unknown as ethers.utils.Fragment[]
+        ),
+        this.ethersProviderPrysm
       );
       // NOTE:
       // Use this long way of calling so we can check for method existence on a bool-returning method.
@@ -2100,10 +2110,10 @@ export class OpenSeaPort {
     this.logger(
       `Approving token ${tokenId} for ${accountAddress} and schema ${schema}`
     );
-    const tokenContract = this.web3.eth.contract(
-      tokenAbi as Web3.AbiDefinition[]
-    );
-    const contract = await tokenContract.at(tokenAddress);
+    const tokenContract = new this.web3.eth.Contract(
+      tokenAbi,
+      tokenAddress
+    ) as unknown as ERC721v3Abi | ERC1155Abi;
 
     if (!proxyAddress) {
       proxyAddress = (await this._getProxy(accountAddress)) || undefined;
@@ -2114,9 +2124,11 @@ export class OpenSeaPort {
 
     const approvalAllCheck = async () => {
       const nftContract = new Contract(
-        contract.address,
-        new ethers.utils.Interface(ERC721),
-        this.ethersProvider
+        tokenAddress,
+        new ethers.utils.Interface(
+          ERC721 as unknown as ethers.utils.Fragment[]
+        ),
+        this.ethersProviderPrysm
       );
       // NOTE:
       // Use this long way of calling so we can check for method existence on a bool-returning method.
@@ -2165,9 +2177,11 @@ export class OpenSeaPort {
         this.logger("Approving proxy for all tokens");
         return {
           from: accountAddress,
-          to: contract.address,
+          to: tokenAddress,
           method: "setApprovalForAll",
-          callData: contract.setApprovalForAll.getData(proxyAddress, true),
+          callData: tokenContract.methods
+            .setApprovalForAll(proxyAddress, true)
+            .encodeABI(),
           abi: tokenAbi,
           gasEstimate: undefined,
         };
@@ -2383,7 +2397,7 @@ export class OpenSeaPort {
       proxyAddress,
     });
 
-    if (approvedAmount.greaterThanOrEqualTo(minimumAmount)) {
+    if (approvedAmount.isGreaterThanOrEqualTo(minimumAmount)) {
       this.logger("Already approved enough currency for trading");
       return null;
     }
@@ -2402,7 +2416,7 @@ export class OpenSeaPort {
       tokenAddress.toLowerCase()
     );
 
-    if (minimumAmount.greaterThan(0) && hasOldApproveMethod) {
+    if (minimumAmount.isGreaterThan(0) && hasOldApproveMethod) {
       // Older erc20s require initial approval to be 0
       throw new Error(
         "Prysm Squads cannot approve fungible token with old approve method"
@@ -2497,7 +2511,7 @@ export class OpenSeaPort {
    * Gets the price for the order using the contract
    * @param order The order to calculate the price for
    */
-  public async getCurrentPrice(order: Order, useEthers = false) {
+  public async getCurrentPricePrysm(order: Order, useEthers = false) {
     if (useEthers) {
       const partialAbi = new ethers.utils.Interface([
         {
@@ -2556,13 +2570,13 @@ export class OpenSeaPort {
       const address = WyvernProtocol.getExchangeContractAddress(
         this._networkName
       );
-      if (!this.ethersProvider) {
+      if (!this.ethersProviderPrysm) {
         throw new Error("missing ethers provider");
       }
       const contract = new ethers.Contract(
         address,
         partialAbi,
-        this.ethersProvider
+        this.ethersProviderPrysm
       );
       const currentPrice = await contract.calculateCurrentPrice_(
         [
@@ -2599,38 +2613,37 @@ export class OpenSeaPort {
       console.log("Current price is:", currentPrice?.toString());
       return new BigNumber(currentPrice?.toString());
     }
-    const currentPrice =
-      await this._wyvernProtocolReadOnly.wyvernExchange.calculateCurrentPrice_
-        .callAsync(
-          [
-            order.exchange,
-            order.maker,
-            order.taker,
-            order.feeRecipient,
-            order.target,
-            order.staticTarget,
-            order.paymentToken,
-          ],
-          [
-            order.makerRelayerFee,
-            order.takerRelayerFee,
-            order.makerProtocolFee,
-            order.takerProtocolFee,
-            order.basePrice,
-            order.extra,
-            order.listingTime,
-            order.expirationTime,
-            order.salt,
-          ],
-          order.feeMethod,
-          order.side,
-          order.saleKind,
-          order.howToCall,
-          order.calldata,
-          order.replacementPattern,
-          order.staticExtradata
-        )
-        .callAsync();
+    const currentPrice = await this._wyvernProtocolReadOnly.wyvernExchange
+      .calculateCurrentPrice_(
+        [
+          order.exchange,
+          order.maker,
+          order.taker,
+          order.feeRecipient,
+          order.target,
+          order.staticTarget,
+          order.paymentToken,
+        ],
+        [
+          order.makerRelayerFee,
+          order.takerRelayerFee,
+          order.makerProtocolFee,
+          order.takerProtocolFee,
+          order.basePrice,
+          order.extra,
+          order.listingTime,
+          order.expirationTime,
+          order.salt,
+        ],
+        order.feeMethod,
+        order.side,
+        order.saleKind,
+        order.howToCall,
+        order.calldata,
+        order.replacementPattern,
+        order.staticExtradata
+      )
+      .callAsync();
 
     return currentPrice;
   }
@@ -3417,7 +3430,7 @@ export class OpenSeaPort {
     const contract = new Contract(
       WyvernProtocol.getProxyRegistryContractAddress(this._networkName),
       tokenproxy,
-      this.ethersProvider
+      this.ethersProviderPrysm
     );
 
     let proxyAddress: string | null = await contract.proxies(accountAddress);
@@ -3497,17 +3510,17 @@ export class OpenSeaPort {
 
     const txnData = { from: accountAddress };
 
-    const gasEstimate =
-      await wyvernProtocol.wyvernProxyRegistry.registerProxy.estimateGasAsync(
-        txnData
-      );
+    const gasEstimate = await wyvernProtocol.wyvernProxyRegistry
+      .registerProxy()
+      .estimateGasAsync(txnData);
     this.logger(`Prysm Gas estimate: ${gasEstimate}`);
     return {
       ...txnData,
       to: WyvernProtocol.getProxyRegistryContractAddress(this._networkName),
       method: "registerProxy",
-      callData:
-        wyvernProtocol.wyvernProxyRegistry.registerProxy.getABIEncodedTransactionData(),
+      callData: wyvernProtocol.wyvernProxyRegistry
+        .registerProxy()
+        .getABIEncodedTransactionData(),
       gasEstimate: this._correctGasAmount(gasEstimate),
       abi: proxyRegistryABI as PartialReadonlyContractAbi,
     };
@@ -3568,8 +3581,8 @@ export class OpenSeaPort {
 
     const erc20 = new Contract(
       tokenAddress,
-      new ethers.utils.Interface(ERC20),
-      this.ethersProvider
+      new ethers.utils.Interface(ERC20 as unknown as ethers.utils.Fragment[]),
+      this.ethersProviderPrysm
     );
     const approved = await erc20.allowance(accountAddress, addressToApprove);
     // const approved = await rawCall(this.web3, {
@@ -4523,7 +4536,7 @@ export class OpenSeaPort {
         : [];
     const tokenAddress = order.paymentToken;
 
-    const wyvernProtocol = this._getWyvernProtocolForOrder(order);
+    const wyvernProtocol = this._wyvernProtocol;
 
     const needsApproval = await this.prysmApproveAll({
       schemaNames,
@@ -4564,8 +4577,8 @@ export class OpenSeaPort {
     if (useEthers) {
       sellValid = await this._validateOrderParameters(order);
     } else {
-      sellValid =
-        await wyvernProtocol.wyvernExchange.validateOrderParameters_.callAsync(
+      sellValid = await wyvernProtocol.wyvernExchange
+        .validateOrderParameters_(
           [
             order.exchange,
             order.maker,
@@ -4592,9 +4605,9 @@ export class OpenSeaPort {
           order.howToCall,
           order.calldata,
           order.replacementPattern,
-          order.staticExtradata,
-          { from: accountAddress }
-        );
+          order.staticExtradata
+        )
+        .callAsync({ from: accountAddress });
     }
     if (!sellValid) {
       console.error(order);
@@ -5099,7 +5112,7 @@ export class OpenSeaPort {
     const contract = new ethers.Contract(
       address,
       partialAbi,
-      this.ethersProvider
+      this.ethersProviderPrysm
     );
     return !!(await contract.validateOrderParameters_(
       [
@@ -5623,7 +5636,7 @@ export class OpenSeaPort {
           args[9],
           args[10]
         )
-        .estimateGasAsync(txnData);
+        .estimateGasAsync({ from: accountAddress });
 
       txnData.gas = this._correctGasAmount(gasEstimate);
     } catch (error) {
@@ -5677,6 +5690,104 @@ export class OpenSeaPort {
     return txHash;
   }
 
+  // Throws
+  public async prysmBuyOrderValidationAndApprovals({
+    order,
+    counterOrder,
+    accountAddress,
+    useEthers,
+  }: {
+    order: UnhashedOrder;
+    counterOrder?: Order;
+    accountAddress: string;
+    useEthers?: boolean;
+  }) {
+    const tokenAddress = order.paymentToken;
+
+    if (tokenAddress != NULL_ADDRESS) {
+      const balance = await this.getTokenBalance({
+        accountAddress,
+        tokenAddress,
+      });
+
+      /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
+      let minimumAmount = makeBigNumber(order.basePrice);
+      if (counterOrder) {
+        minimumAmount = await this._getRequiredAmountForTakingSellOrder(
+          counterOrder
+        );
+      }
+
+      // Check WETH balance
+      if (balance.toNumber() < minimumAmount.toNumber()) {
+        if (
+          tokenAddress ==
+          WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
+        ) {
+          throw new Error("Insufficient balance. You may need to wrap Ether.");
+        } else {
+          throw new Error("Insufficient balance.");
+        }
+      }
+
+      // Check token approval
+      // This can be done at a higher level to show UI
+      const needsApprovalCalldata = await this.prysmApproveFungibleToken({
+        accountAddress,
+        tokenAddress,
+        minimumAmount,
+      });
+      if (needsApprovalCalldata) {
+        return needsApprovalCalldata;
+      }
+    }
+
+    let buyValid = false;
+    if (useEthers) {
+      // Check order formation
+      buyValid = await this._validateOrderParameters(order);
+    } else {
+      buyValid = await this._wyvernProtocolReadOnly.wyvernExchange
+        .validateOrderParameters_(
+          [
+            order.exchange,
+            order.maker,
+            order.taker,
+            order.feeRecipient,
+            order.target,
+            order.staticTarget,
+            order.paymentToken,
+          ],
+          [
+            order.makerRelayerFee,
+            order.takerRelayerFee,
+            order.makerProtocolFee,
+            order.takerProtocolFee,
+            order.basePrice,
+            order.extra,
+            order.listingTime,
+            order.expirationTime,
+            order.salt,
+          ],
+          order.feeMethod,
+          order.side,
+          order.saleKind,
+          order.howToCall,
+          order.calldata,
+          order.replacementPattern,
+          order.staticExtradata
+        )
+        .callAsync({ from: accountAddress });
+    }
+    if (!buyValid) {
+      console.error(order);
+      throw new Error(
+        `Failed to validate buy order parameters. Make sure you're on the right network!`
+      );
+    }
+    return null;
+  }
+
   private async _prysmAtomicMatch({
     buy,
     sell,
@@ -5694,9 +5805,9 @@ export class OpenSeaPort {
     let shouldValidateBuy = true;
     let shouldValidateSell = true;
     const exchange =
-      (await this._getOrderCreateWyvernExchangeAddress()) ||
+      this._wyvernProtocol.wyvernExchange.address ||
       WyvernProtocol.getExchangeContractAddress(this._networkName);
-    const wyvernProtocolReadOnly = this._getWyvernProtocolForOrder(buy, true);
+    const wyvernProtocolReadOnly = this._wyvernProtocolReadOnly;
 
     if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
       // USER IS THE SELLER, only validate the buy order
@@ -5822,8 +5933,8 @@ export class OpenSeaPort {
           buy.exchange
       );
       // Typescript splat doesn't typecheck
-      const gasEstimate =
-        await wyvernProtocolReadOnly.wyvernExchange.atomicMatch_.estimateGasAsync(
+      const gasEstimate = await wyvernProtocolReadOnly.wyvernExchange
+        .atomicMatch_(
           args[0],
           args[1],
           args[2],
@@ -5834,9 +5945,9 @@ export class OpenSeaPort {
           args[7],
           args[8],
           args[9],
-          args[10],
-          txnData
-        );
+          args[10]
+        )
+        .estimateGasAsync(txnData);
 
       txnData.gas = this._correctGasAmount(gasEstimate);
 
@@ -5873,7 +5984,7 @@ export class OpenSeaPort {
     sell: Order,
     useEthers = false
   ) {
-    const currentPrice = await this.getCurrentPrice(sell, useEthers);
+    const currentPrice = await this.getCurrentPricePrysm(sell, useEthers);
     const estimatedPrice = estimateCurrentPrice(sell);
 
     const maxPrice = BigNumber.max(currentPrice, estimatedPrice);
