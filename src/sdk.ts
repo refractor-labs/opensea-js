@@ -8,16 +8,14 @@ import {
 import { BigNumber } from "bignumber.js";
 import { Web3JsProvider } from "ethereum-types";
 import { isValidAddress } from "ethereumjs-util";
-import { ethers, providers, BigNumber as BigNumberEthers } from "ethers";
+import {
+  ethers,
+  providers,
+  BigNumber as BigNumberEthers,
+  Contract,
+} from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
-import { Seaport } from "seaport-js";
-import { CROSS_CHAIN_SEAPORT_ADDRESS } from "seaport-js/lib/constants";
-import {
-  ConsiderationInputItem,
-  CreateInputItem,
-  OrderComponents,
-} from "seaport-js/lib/types";
 import Web3 from "web3";
 import { WyvernProtocol } from "wyvern-js";
 import * as WyvernSchemas from "wyvern-schemas";
@@ -134,6 +132,16 @@ import {
   WyvernSchemaName,
 } from "./types";
 import {
+  encodeAtomicizedBuy,
+  encodeAtomicizedSell,
+  encodeAtomicizedTransfer,
+  encodeBuy,
+  encodeCall,
+  encodeProxyCall,
+  encodeSell,
+  encodeTransferCall,
+} from "./utils/schema";
+import {
   annotateERC20TransferABI,
   annotateERC721TransferABI,
   assignOrdersToSides,
@@ -158,21 +166,8 @@ import {
   sendRawTransaction,
   signTypedDataAsync,
   validateAndFormatWalletAddress,
-  getMaxOrderExpirationTimestamp,
-  hasErrorCode,
-  getAssetItemType,
   BigNumberInput,
 } from "./utils/utils";
-import {
-  encodeAtomicizedBuy,
-  encodeAtomicizedSell,
-  encodeAtomicizedTransfer,
-  encodeBuy,
-  encodeCall,
-  encodeProxyCall,
-  encodeSell,
-  encodeTransferCall,
-} from "./utils/schema";
 
 export class OpenSeaSDK {
   // Web3 instance to use
@@ -264,7 +259,7 @@ export class OpenSeaSDK {
       {
         conduitKeyToConduit: CONDUIT_KEYS_TO_CONDUIT,
         overrides: {
-          defaultConduitKey: OPENSEA_CROSS_CHAIN_CONDUIT_KEY,
+          defaultConduitKey: CROSS_CHAIN_DEFAULT_CONDUIT_KEY,
         },
       }
     );
@@ -736,7 +731,7 @@ export class OpenSeaSDK {
     );
   }
 
-  private getAmountWithBasisPointsApplied = (
+  public getAmountWithBasisPointsApplied = (
     amount: BigNumber,
     basisPoints: number
   ) => {
@@ -746,7 +741,7 @@ export class OpenSeaSDK {
       .toString();
   };
 
-  private async getFees({
+  public async getFees({
     openseaAsset: asset,
     paymentTokenAddress,
     startAmount,
@@ -821,7 +816,7 @@ export class OpenSeaSDK {
     };
   }
 
-  private getAssetItems(
+  public getAssetItems(
     assets: Asset[],
     quantities: BigNumber[] = [],
     fallbackSchema?: WyvernSchemaName
@@ -1497,7 +1492,7 @@ export class OpenSeaSDK {
     return this.validateAndPostOrder(orderWithSignature);
   }
 
-  private async fulfillPrivateOrder({
+  public async fulfillPrivateOrder({
     order,
     accountAddress,
   }: {
@@ -1607,12 +1602,12 @@ export class OpenSeaSDK {
    * @returns Transaction hash for fulfilling the order
    */
   public async prysmFulfillOrder({
-                                   order,
-                                   accountAddress,
-                                   recipientAddress,
-                                   referrerAddress,
-                                   useEthers = false,
-                                 }: {
+    order,
+    accountAddress,
+    recipientAddress,
+    referrerAddress,
+    useEthers = false,
+  }: {
     order: Order;
     accountAddress: string;
     recipientAddress?: string;
@@ -1648,6 +1643,194 @@ export class OpenSeaSDK {
     // return transactionHash;
   }
 
+  private async _prysmAtomicMatch({
+    buy,
+    sell,
+    accountAddress,
+    metadata = NULL_BLOCK_HASH,
+    useEthers = false,
+  }: {
+    buy: Order;
+    sell: Order;
+    accountAddress: string;
+    metadata?: string;
+    useEthers?: boolean;
+  }) {
+    let value;
+    let shouldValidateBuy = true;
+    let shouldValidateSell = true;
+    const exchange =
+      this._wyvernProtocol.wyvernExchange.address ||
+      WyvernProtocol.getExchangeContractAddress(this._networkName);
+    const wyvernProtocolReadOnly = this._wyvernProtocolReadOnly;
+
+    if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
+      // USER IS THE SELLER, only validate the buy order
+      await this.prysmSellOrderValidationAndApprovals({
+        order: sell,
+        accountAddress,
+      });
+      shouldValidateSell = false;
+    } else if (buy.maker.toLowerCase() == accountAddress.toLowerCase()) {
+      // USER IS THE BUYER, only validate the sell order
+      await this.prysmBuyOrderValidationAndApprovals({
+        order: buy,
+        counterOrder: sell,
+        accountAddress,
+        useEthers,
+      });
+      shouldValidateBuy = false;
+
+      // If using ETH to pay, set the value of the transaction to the current price
+      if (buy.paymentToken == NULL_ADDRESS) {
+        value = await this._getRequiredAmountForTakingSellOrder(sell);
+      }
+    } else {
+      // User is neither - matching service
+    }
+
+    const validateMatch = await this._validateMatch({
+      buy,
+      sell,
+      accountAddress,
+      shouldValidateBuy,
+      shouldValidateSell,
+    });
+    this.logger("validateMatch: " + validateMatch);
+
+    this._dispatch(EventType.MatchOrders, {
+      buy,
+      sell,
+      accountAddress,
+      matchMetadata: metadata,
+    });
+
+    //let txHash;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const txnData: any = { from: accountAddress, value };
+    const args: WyvernAtomicMatchParameters = [
+      [
+        buy.exchange,
+        buy.maker,
+        buy.taker,
+        buy.feeRecipient,
+        buy.target,
+        buy.staticTarget,
+        buy.paymentToken,
+        sell.exchange,
+        sell.maker,
+        sell.taker,
+        sell.feeRecipient,
+        sell.target,
+        sell.staticTarget,
+        sell.paymentToken,
+      ],
+      [
+        buy.makerRelayerFee,
+        buy.takerRelayerFee,
+        buy.makerProtocolFee,
+        buy.takerProtocolFee,
+        buy.basePrice,
+        buy.extra,
+        buy.listingTime,
+        buy.expirationTime,
+        buy.salt,
+        sell.makerRelayerFee,
+        sell.takerRelayerFee,
+        sell.makerProtocolFee,
+        sell.takerProtocolFee,
+        sell.basePrice,
+        sell.extra,
+        sell.listingTime,
+        sell.expirationTime,
+        sell.salt,
+      ],
+      [
+        buy.feeMethod,
+        buy.side,
+        buy.saleKind,
+        buy.howToCall,
+        sell.feeMethod,
+        sell.side,
+        sell.saleKind,
+        sell.howToCall,
+      ],
+      buy.calldata,
+      sell.calldata,
+      buy.replacementPattern,
+      sell.replacementPattern,
+      buy.staticExtradata,
+      sell.staticExtradata,
+      [buy.v || 0, sell.v || 0],
+      [
+        buy.r || NULL_BLOCK_HASH,
+        buy.s || NULL_BLOCK_HASH,
+        sell.r || NULL_BLOCK_HASH,
+        sell.s || NULL_BLOCK_HASH,
+        metadata,
+      ],
+    ];
+
+    // Estimate gas first
+    try {
+      const prot = (wyvernProtocolReadOnly as unknown as any)?.wyvernExchange
+        ?.web3ContractInstance?.address;
+      this.logger("wyvernProtocolReadOnly" + wyvernProtocolReadOnly);
+      this.logger(
+        "atomic match exchange address is" +
+          prot +
+          " EXCHANGE address is " +
+          exchange +
+          " buy.exchange is " +
+          buy.exchange
+      );
+      // Typescript splat doesn't typecheck
+      const gasEstimate = await wyvernProtocolReadOnly.wyvernExchange
+        .atomicMatch_(
+          args[0],
+          args[1],
+          args[2],
+          args[3],
+          args[4],
+          args[5],
+          args[6],
+          args[7],
+          args[8],
+          args[9],
+          args[10]
+        )
+        .estimateGasAsync(txnData);
+
+      txnData.gas = this._correctGasAmount(gasEstimate);
+
+      console.log("Args == ", args);
+      console.log("Gas Estimate == ", gasEstimate);
+      console.log("Correct Gas Estimate == ", txnData.gas);
+    } catch (error) {
+      console.error(`Failed atomic match with args: `, args, error);
+      throw new Error(
+        `Oops, the Ethereum network rejected this transaction :( The OpenSea devs have been alerted, but this problem is typically due an item being locked or untransferrable. The exact error was "${
+          error instanceof Error
+            ? error.message.substr(0, MAX_ERROR_LENGTH)
+            : "unknown"
+        }..."`
+      );
+    }
+    const argsPrysm: WyvernAtomicMatchParametersPrysm = [
+      args[0],
+      args[1].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      args[2].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      args[3],
+      args[4],
+      args[5],
+      args[6],
+      args[7],
+      args[8],
+      args[9].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
+      args[10],
+    ];
+    return { args: argsPrysm, txnData, to: buy.exchange };
+  }
   /**
    * Fullfill or "take" an order for an asset, either a buy or sell order
    * @param param0 __namedParamaters Object
@@ -1705,7 +1888,7 @@ export class OpenSeaSDK {
     return transactionHash;
   }
 
-  private async cancelSeaportOrders({
+  public async cancelSeaportOrders({
     orders,
     accountAddress,
   }: {
@@ -1725,43 +1908,6 @@ export class OpenSeaSDK {
    * @param accountAddress The order maker's wallet address
    */
   public async cancelOrder({
-    order,
-    accountAddress,
-  }: {
-    order: OrderV2;
-    accountAddress: string;
-  }) {
-    // this._dispatch(EventType.CancelOrder, { order, accountAddress });
-
-    // Transact and get the transaction hash
-    let transactionHash: string;
-    switch (order.protocolAddress) {
-      case CROSS_CHAIN_SEAPORT_ADDRESS: {
-        transactionHash = await this.cancelSeaportOrders({
-          orders: [order.protocolData.parameters],
-          accountAddress,
-        });
-        break;
-      }
-      default:
-        throw new Error("Unsupported protocol");
-    }
-
-    // Await transaction confirmation
-    await this._confirmTransaction(
-      transactionHash,
-      EventType.CancelOrder,
-      "Cancelling order"
-    );
-  }
-
-  /**
-   * Cancel an order on-chain, preventing it from ever being fulfilled.
-   * @param param0 __namedParameters Object
-   * @param order The order to cancel
-   * @param accountAddress The order maker's wallet address
-   */
-  public async cancelOrderLegacyWyvern({
     order,
     accountAddress,
   }: {
@@ -1906,51 +2052,6 @@ export class OpenSeaSDK {
       to: WyvernProtocol.getExchangeContractAddress(this._networkName),
       calldataArgs: args,
     };
-
-    // const transactionHash =
-    //   await wyvernProtocol.wyvernExchange.cancelOrder_.sendTransactionAsync(
-    //     [
-    //       order.exchange,
-    //       order.maker,
-    //       order.taker,
-    //       order.feeRecipient,
-    //       order.target,
-    //       order.staticTarget,
-    //       order.paymentToken,
-    //     ],
-    //     [
-    //       order.makerRelayerFee,
-    //       order.takerRelayerFee,
-    //       order.makerProtocolFee,
-    //       order.takerProtocolFee,
-    //       order.basePrice,
-    //       order.extra,
-    //       order.listingTime,
-    //       order.expirationTime,
-    //       order.salt,
-    //     ].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
-    //     order.feeMethod,
-    //     order.side,
-    //     order.saleKind,
-    //     order.howToCall,
-    //     order.calldata,
-    //     order.replacementPattern,
-    //     order.staticExtradata,
-    //     order.v || 0,
-    //     order.r || NULL_BLOCK_HASH,
-    //     order.s || NULL_BLOCK_HASH,
-    //     { from: accountAddress }
-    //   );
-    //
-    // await this._confirmTransaction(
-    //   transactionHash.toString(),
-    //   EventType.CancelOrder,
-    //   "Cancelling order",
-    //   async () => {
-    //     const isOpen = await this._validateOrder(order);
-    //     return !isOpen;
-    //   }
-    // );
   }
 
   /**
@@ -2741,7 +2842,10 @@ export class OpenSeaSDK {
       this.logger("Current price is: " + currentPrice?.toString());
       console.log("Current price is:", currentPrice?.toString());
       return new BigNumber(currentPrice?.toString());
+    } else {
+      return this.getCurrentPriceLegacyWyvern(order);
     }
+  }
   /**
    * Gets the price for the order using the contract
    * @param order The order to calculate the price for
@@ -5406,7 +5510,7 @@ export class OpenSeaSDK {
    * @param totalBuyerFeeBasisPoints Total buyer fees
    * @param totalSellerFeeBasisPoints Total seller fees
    */
-  private _validateFees(
+  public _validateFees(
     totalBuyerFeeBasisPoints: number,
     totalSellerFeeBasisPoints: number
   ) {
@@ -5432,7 +5536,7 @@ export class OpenSeaSDK {
    * @param listingTimestamp Timestamp to start the order (in seconds), or undefined to start it now
    * @param waitingForBestCounterOrder Whether this order should be hidden until the best match is found
    */
-  private _getTimeParameters({
+  public _getTimeParameters({
     expirationTimestamp = getMaxOrderExpirationTimestamp(),
     listingTimestamp,
     waitingForBestCounterOrder = false,
@@ -5601,17 +5705,6 @@ export class OpenSeaSDK {
         : WyvernProtocol.toBaseUnitAmount(endAmount, token.decimals)
       : undefined;
 
-    const endPrice = endAmount
-      ? isEther
-        ? makeBigNumber(
-            this.web3.utils.toWei(endAmount.toString(), "ether")
-          ).integerValue()
-        : WyvernProtocol.toBaseUnitAmount(
-            makeBigNumber(endAmount),
-            token.decimals
-          )
-      : undefined;
-
     const extra = isEther
       ? makeBigNumber(
           this.web3.utils.toWei(priceDiff.toString(), "ether")
@@ -5635,7 +5728,7 @@ export class OpenSeaSDK {
     return { basePrice, extra, paymentToken, reservePrice, endPrice };
   }
 
-  private _getMetadata(order: Order, referrerAddress?: string) {
+  public _getMetadata(order: Order, referrerAddress?: string) {
     const referrer = referrerAddress || order.metadata.referrerAddress;
     if (referrer && isValidAddress(referrer)) {
       return referrer;
@@ -5834,105 +5927,105 @@ export class OpenSeaSDK {
     }
     return txHash;
   }
-// Throws
+  // Throws
   public async prysmBuyOrderValidationAndApprovals({
-      order,
-      counterOrder,
-      accountAddress,
-      useEthers,
-    }: {
-      order: UnhashedOrder;
-      counterOrder?: Order;
-      accountAddress: string;
-      useEthers?: boolean;
-    }) {
-      const tokenAddress = order.paymentToken;
+    order,
+    counterOrder,
+    accountAddress,
+    useEthers,
+  }: {
+    order: UnhashedOrder;
+    counterOrder?: Order;
+    accountAddress: string;
+    useEthers?: boolean;
+  }) {
+    const tokenAddress = order.paymentToken;
 
-      if (tokenAddress != NULL_ADDRESS) {
-        const balance = await this.getTokenBalance({
-          accountAddress,
-          tokenAddress,
-        });
+    if (tokenAddress != NULL_ADDRESS) {
+      const balance = await this.getTokenBalance({
+        accountAddress,
+        tokenAddress,
+      });
 
-        /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
-        let minimumAmount = makeBigNumber(order.basePrice);
-        if (counterOrder) {
-          minimumAmount = await this._getRequiredAmountForTakingSellOrder(
-            counterOrder
-          );
-        }
-
-        // Check WETH balance
-        if (balance.toNumber() < minimumAmount.toNumber()) {
-          if (
-            tokenAddress ==
-            WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
-          ) {
-            throw new Error("Insufficient balance. You may need to wrap Ether.");
-          } else {
-            throw new Error("Insufficient balance.");
-          }
-        }
-
-        // Check token approval
-        // This can be done at a higher level to show UI
-        const needsApprovalCalldata = await this.prysmApproveFungibleToken({
-          accountAddress,
-          tokenAddress,
-          minimumAmount,
-        });
-        if (needsApprovalCalldata) {
-          return needsApprovalCalldata;
-        }
-      }
-
-      let buyValid = false;
-      if (useEthers) {
-        // Check order formation
-        buyValid = await this._validateOrderParameters(order);
-      } else {
-        buyValid = await this._wyvernProtocolReadOnly.wyvernExchange
-          .validateOrderParameters_(
-            [
-              order.exchange,
-              order.maker,
-              order.taker,
-              order.feeRecipient,
-              order.target,
-              order.staticTarget,
-              order.paymentToken,
-            ],
-            [
-              order.makerRelayerFee,
-              order.takerRelayerFee,
-              order.makerProtocolFee,
-              order.takerProtocolFee,
-              order.basePrice,
-              order.extra,
-              order.listingTime,
-              order.expirationTime,
-              order.salt,
-            ],
-            order.feeMethod,
-            order.side,
-            order.saleKind,
-            order.howToCall,
-            order.calldata,
-            order.replacementPattern,
-            order.staticExtradata
-          )
-          .callAsync({ from: accountAddress });
-      }
-      if (!buyValid) {
-        console.error(order);
-        throw new Error(
-          `Failed to validate buy order parameters. Make sure you're on the right network!`
+      /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
+      let minimumAmount = makeBigNumber(order.basePrice);
+      if (counterOrder) {
+        minimumAmount = await this._getRequiredAmountForTakingSellOrder(
+          counterOrder
         );
       }
-      return null;
+
+      // Check WETH balance
+      if (balance.toNumber() < minimumAmount.toNumber()) {
+        if (
+          tokenAddress ==
+          WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
+        ) {
+          throw new Error("Insufficient balance. You may need to wrap Ether.");
+        } else {
+          throw new Error("Insufficient balance.");
+        }
+      }
+
+      // Check token approval
+      // This can be done at a higher level to show UI
+      const needsApprovalCalldata = await this.prysmApproveFungibleToken({
+        accountAddress,
+        tokenAddress,
+        minimumAmount,
+      });
+      if (needsApprovalCalldata) {
+        return needsApprovalCalldata;
+      }
     }
-    
-  private async _getRequiredAmountForTakingSellOrder(sell: Order) {
+
+    let buyValid = false;
+    if (useEthers) {
+      // Check order formation
+      buyValid = await this._validateOrderParameters(order);
+    } else {
+      buyValid = await this._wyvernProtocolReadOnly.wyvernExchange
+        .validateOrderParameters_(
+          [
+            order.exchange,
+            order.maker,
+            order.taker,
+            order.feeRecipient,
+            order.target,
+            order.staticTarget,
+            order.paymentToken,
+          ],
+          [
+            order.makerRelayerFee,
+            order.takerRelayerFee,
+            order.makerProtocolFee,
+            order.takerProtocolFee,
+            order.basePrice,
+            order.extra,
+            order.listingTime,
+            order.expirationTime,
+            order.salt,
+          ],
+          order.feeMethod,
+          order.side,
+          order.saleKind,
+          order.howToCall,
+          order.calldata,
+          order.replacementPattern,
+          order.staticExtradata
+        )
+        .callAsync({ from: accountAddress });
+    }
+    if (!buyValid) {
+      console.error(order);
+      throw new Error(
+        `Failed to validate buy order parameters. Make sure you're on the right network!`
+      );
+    }
+    return null;
+  }
+
+  public async _getRequiredAmountForTakingSellOrder(sell: Order) {
     const currentPrice = await this.getCurrentPriceLegacyWyvern(sell);
     const estimatedPrice = estimateCurrentPrice(sell);
 
@@ -6105,7 +6198,7 @@ export class OpenSeaSDK {
     }
   }
 
-  private _getSchemaName(asset: Asset | OpenSeaAsset) {
+  public _getSchemaName(asset: Asset | OpenSeaAsset) {
     if (asset.schemaName) {
       return asset.schemaName;
     } else if ("assetContract" in asset) {
@@ -6115,7 +6208,7 @@ export class OpenSeaSDK {
     return undefined;
   }
 
-  private _getSchema(schemaName?: WyvernSchemaName): Schema<WyvernAsset> {
+  public _getSchema(schemaName?: WyvernSchemaName): Schema<WyvernAsset> {
     const schemaName_ = schemaName || WyvernSchemaName.ERC721;
     const schema = WyvernSchemas.schemas[this._networkName].filter(
       (s) => s.name == schemaName_
