@@ -724,7 +724,7 @@ export class OpenSeaPort {
       .toString();
   };
 
-  private async getFees({
+  public async getFees({
     openseaAsset: asset,
     paymentTokenAddress,
     startAmount,
@@ -799,7 +799,7 @@ export class OpenSeaPort {
     };
   }
 
-  private getAssetItems(
+  public getAssetItems(
     assets: Asset[],
     quantities: number[] = [],
     fallbackSchema?: WyvernSchemaName
@@ -5388,7 +5388,7 @@ export class OpenSeaPort {
    * @param startAmount The base value for the order, in the token's main units (e.g. ETH instead of wei)
    * @param endAmount The end value for the order, in the token's main units (e.g. ETH instead of wei). If unspecified, the order's `extra` attribute will be 0
    */
-  private async _getPriceParameters(
+  public async _getPriceParameters(
     orderSide: OrderSide,
     tokenAddress: string,
     expirationTime: number,
