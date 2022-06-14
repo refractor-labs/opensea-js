@@ -9,7 +9,7 @@ import {
   ORDERBOOK_VERSION,
   ORDER_MATCHING_LATENCY_SECONDS,
 } from "../../constants";
-import { orderToJSON, OpenSeaPort } from "../../index";
+import { orderToJSON, OpenSeaSDK } from "../../index";
 import { Network, OrderSide } from "../../types";
 import { getOrderHash, makeBigNumber } from "../../utils/utils";
 import {
@@ -30,7 +30,7 @@ import {
 
 const provider = new Web3.providers.HttpProvider(MAINNET_PROVIDER_URL);
 
-const client = new OpenSeaPort(
+const client = new OpenSeaSDK(
   provider,
   {
     networkName: Network.Main,
@@ -151,7 +151,7 @@ suite("api", () => {
     if (!order.asset) {
       return;
     }
-    const url = `https://testnets.opensea.io/assets/${order.asset.assetContract.address}/${order.asset.tokenId}`;
+    const url = `https://testnets.opensea.io/assets/rinkeby/${order.asset.assetContract.address}/${order.asset.tokenId}`;
     assert.equal(order.asset.openseaLink, url);
   });
 
@@ -160,7 +160,7 @@ suite("api", () => {
     if (!order.asset) {
       return;
     }
-    const url = `https://opensea.io/assets/${order.asset.assetContract.address}/${order.asset.tokenId}`;
+    const url = `https://opensea.io/assets/ethereum/${order.asset.assetContract.address}/${order.asset.tokenId}`;
     assert.equal(order.asset.openseaLink, url);
   });
 
@@ -194,6 +194,7 @@ suite("api", () => {
     const forKitty = await apiToTest.getOrdersLegacyWyvern({
       asset_contract_address: CK_RINKEBY_ADDRESS,
       token_id: CK_RINKEBY_TOKEN_ID,
+      side: OrderSide.Buy,
     });
     assert.isArray(forKitty.orders);
   });
@@ -279,6 +280,7 @@ suite("api", () => {
     const res = await apiToTest.getOrdersLegacyWyvern({
       // Get an old order to make sure listing time is too early
       listed_before: Math.round(Date.now() / 1000 - 3600),
+      side: OrderSide.Sell,
     });
     const order = res.orders[0];
     assert.isNotNull(order);

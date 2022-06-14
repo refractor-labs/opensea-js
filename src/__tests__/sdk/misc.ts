@@ -8,7 +8,7 @@ import {
   MAX_UINT_256,
 } from "../../constants";
 import { ERC721 } from "../../contracts";
-import { OpenSeaPort } from "../../index";
+import { OpenSeaSDK } from "../../index";
 import { Network } from "../../types";
 import {
   getNonCompliantApprovalAddress,
@@ -26,7 +26,7 @@ import {
 
 const provider = new Web3.providers.HttpProvider(MAINNET_PROVIDER_URL);
 
-const client = new OpenSeaPort(
+const client = new OpenSeaSDK(
   provider,
   {
     networkName: Network.Main,
@@ -35,7 +35,7 @@ const client = new OpenSeaPort(
   (line) => console.info(`MAINNET: ${line}`)
 );
 
-suite("seaport: misc", () => {
+suite("SDK: misc", () => {
   test("Instance has public methods", () => {
     assert.equal(typeof client.getCurrentPriceLegacyWyvern, "function");
     assert.equal(typeof client.wrapEth, "function");

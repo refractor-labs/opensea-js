@@ -1,12 +1,14 @@
+import { Seaport } from "@opensea/seaport-js";
+import { CROSS_CHAIN_SEAPORT_ADDRESS } from "@opensea/seaport-js/lib/constants";
+import {
+  ConsiderationInputItem,
+  CreateInputItem,
+  OrderComponents,
+} from "@opensea/seaport-js/lib/types";
 import { BigNumber } from "bignumber.js";
 import { Web3JsProvider } from "ethereum-types";
 import { isValidAddress } from "ethereumjs-util";
-import {
-  BigNumber as BigNumberEthers,
-  Contract,
-  ethers,
-  providers,
-} from "ethers";
+import { ethers, providers, BigNumber as BigNumberEthers } from "ethers";
 import { EventEmitter, EventSubscription } from "fbemitter";
 import * as _ from "lodash";
 import { Seaport } from "seaport-js";
@@ -48,10 +50,10 @@ import {
   MIN_EXPIRATION_MINUTES,
   NULL_ADDRESS,
   NULL_BLOCK_HASH,
-  OPENSEA_CROSS_CHAIN_CONDUIT_KEY,
+  CROSS_CHAIN_DEFAULT_CONDUIT_KEY,
   OPENSEA_FEE_RECIPIENT,
   OPENSEA_SELLER_BOUNTY_BASIS_POINTS,
-  OPENSEA_ZONE,
+  DEFAULT_ZONE,
   ORDER_MATCHING_LATENCY_SECONDS,
   RPC_URL_PATH,
   SELL_ORDER_BATCH_SIZE,
@@ -62,7 +64,7 @@ import {
   STATIC_CALL_TX_ORIGIN_RINKEBY_ADDRESS,
   UNISWAP_FACTORY_ADDRESS_MAINNET,
   UNISWAP_FACTORY_ADDRESS_RINKEBY,
-  WETH_ADDRESS,
+  WETH_ADDRESS_BY_NETWORK,
   WRAPPED_NFT_FACTORY_ADDRESS_MAINNET,
   WRAPPED_NFT_FACTORY_ADDRESS_RINKEBY,
   WRAPPED_NFT_LIQUIDATION_PROXY_ADDRESS_MAINNET,
@@ -89,6 +91,11 @@ import {
   requireOrderCalldataCanMatch,
   requireOrdersCanMatch,
 } from "./debugging";
+import {
+  constructPrivateListingCounterOrder,
+  getPrivateListingConsiderations,
+  getPrivateListingFulfillments,
+} from "./orders/privateListings";
 import { OrderV2 } from "./orders/types";
 import { CheezeWizardsBasicTournamentAbi } from "./typechain/contracts/CheezeWizardsBasicTournamentAbi";
 import { DecentralandEstatesAbi } from "./typechain/contracts/DecentralandEstatesAbi";
@@ -151,7 +158,11 @@ import {
   sendRawTransaction,
   signTypedDataAsync,
   validateAndFormatWalletAddress,
-} from "./utils";
+  getMaxOrderExpirationTimestamp,
+  hasErrorCode,
+  getAssetItemType,
+  BigNumberInput,
+} from "./utils/utils";
 import {
   encodeAtomicizedBuy,
   encodeAtomicizedSell,
@@ -163,7 +174,7 @@ import {
   encodeTransferCall,
 } from "./utils/schema";
 
-export class OpenSeaPort {
+export class OpenSeaSDK {
   // Web3 instance to use
   public web3: Web3;
   public ethersSigner?: ethers.providers.JsonRpcSigner;
@@ -257,6 +268,17 @@ export class OpenSeaPort {
         },
       }
     );
+
+    // Ethers Config
+    this.ethersProvider = new providers.Web3Provider(
+      provider as providers.ExternalProvider
+    );
+    this.seaport = new Seaport(this.ethersProvider, {
+      conduitKeyToConduit: CONDUIT_KEYS_TO_CONDUIT,
+      overrides: {
+        defaultConduitKey: CROSS_CHAIN_DEFAULT_CONDUIT_KEY,
+      },
+    });
 
     // WyvernJS config
     this._wyvernProtocol = new WyvernProtocol(provider as Web3JsProvider, {
@@ -724,7 +746,7 @@ export class OpenSeaPort {
       .toString();
   };
 
-  public async getFees({
+  private async getFees({
     openseaAsset: asset,
     paymentTokenAddress,
     startAmount,
@@ -799,9 +821,9 @@ export class OpenSeaPort {
     };
   }
 
-  public getAssetItems(
+  private getAssetItems(
     assets: Asset[],
-    quantities: number[] = [],
+    quantities: BigNumber[] = [],
     fallbackSchema?: WyvernSchemaName
   ): CreateInputItem[] {
     return assets.map((asset, index) => ({
@@ -896,7 +918,6 @@ export class OpenSeaPort {
 
   /**
    * Create a buy order to make an offer on an asset.
-   * NOTE: Creating orders with non-single quantity is currently not supported.
    * @param options Options for creating the buy order
    * @param options.asset The asset to trade
    * @param options.accountAddress Address of the maker's wallet
@@ -911,30 +932,32 @@ export class OpenSeaPort {
     startAmount,
     quantity = 1,
     expirationTime,
-    paymentTokenAddress = WETH_ADDRESS,
+    paymentTokenAddress,
   }: {
     asset: Asset;
     accountAddress: string;
-    startAmount: number;
-    quantity?: number;
-    expirationTime?: number;
+    startAmount: BigNumberInput;
+    quantity?: BigNumberInput;
+    expirationTime?: BigNumberInput;
     paymentTokenAddress?: string;
   }): Promise<OrderV2> {
     if (!asset.tokenId) {
       throw new Error("Asset must have a tokenId");
     }
+    paymentTokenAddress =
+      paymentTokenAddress ?? WETH_ADDRESS_BY_NETWORK[this._networkName];
 
     const openseaAsset = await this.api.getAsset(asset);
     const considerationAssetItems = this.getAssetItems(
       [openseaAsset],
-      [quantity]
+      [makeBigNumber(quantity)]
     );
 
     const { basePrice } = await this._getPriceParameters(
       OrderSide.Buy,
       paymentTokenAddress,
-      expirationTime ?? getMaxOrderExpirationTimestamp(),
-      startAmount
+      makeBigNumber(expirationTime ?? getMaxOrderExpirationTimestamp()),
+      makeBigNumber(startAmount)
     );
 
     const { openseaSellerFee, collectionSellerFee } = await this.getFees({
@@ -959,7 +982,7 @@ export class OpenSeaPort {
         endTime:
           expirationTime?.toString() ??
           getMaxOrderExpirationTimestamp().toString(),
-        zone: OPENSEA_ZONE,
+        zone: DEFAULT_ZONE,
       },
       accountAddress
     );
@@ -1044,8 +1067,6 @@ export class OpenSeaPort {
 
   /**
    * Create a sell order to auction an asset.
-   * NOTE: Creating orders with non-single quantity is currently not supported.
-   * NOTE: English auctions, multiple quantities and private listings are not yet supported.
    * @param options Options for creating the sell order
    * @param options.asset The asset to trade
    * @param options.accountAddress Address of the maker's wallet
@@ -1055,8 +1076,6 @@ export class OpenSeaPort {
    * @param options.listingTime Optional time when the order will become fulfillable, in UTC seconds. Undefined means it will start now.
    * @param options.expirationTime Expiration time for the order, in UTC seconds.
    * @param options.paymentTokenAddress Address of the ERC-20 token to accept in return. If undefined or null, uses Ether.
-   * @param options.waitForHighestBid If set to true, this becomes an English auction that increases in price for every bid. The highest bid wins when the auction expires, as long as it's at least `startAmount`. `expirationTime` must be > 0.
-   * @param options.englishAuctionReservePrice Optional price level, below which orders may be placed but will not be matched.  Orders below the reserve can be manually accepted but will not be automatically matched.
    * @param options.buyerAddress Optional address that's allowed to purchase this item. If specified, no other address will be able to take the order, unless its value is the null address.
    */
   public async createSellOrder({
@@ -1068,18 +1087,16 @@ export class OpenSeaPort {
     listingTime,
     expirationTime,
     paymentTokenAddress = NULL_ADDRESS,
+    buyerAddress,
   }: {
     asset: Asset;
     accountAddress: string;
-    startAmount: number;
-    endAmount?: number;
-    quantity?: number;
+    startAmount: BigNumberInput;
+    endAmount?: BigNumberInput;
+    quantity?: BigNumberInput;
     listingTime?: string;
-    expirationTime?: number;
+    expirationTime?: BigNumberInput;
     paymentTokenAddress?: string;
-    // TODO: Implement the following options
-    waitForHighestBid?: boolean;
-    englishAuctionReservePrice?: string;
     buyerAddress?: string;
   }): Promise<OrderV2> {
     if (!asset.tokenId) {
@@ -1087,14 +1104,17 @@ export class OpenSeaPort {
     }
 
     const openseaAsset = await this.api.getAsset(asset);
-    const offerAssetItems = this.getAssetItems([openseaAsset], [quantity]);
+    const offerAssetItems = this.getAssetItems(
+      [openseaAsset],
+      [makeBigNumber(quantity)]
+    );
 
     const { basePrice, endPrice } = await this._getPriceParameters(
       OrderSide.Sell,
       paymentTokenAddress,
-      expirationTime ?? getMaxOrderExpirationTimestamp(),
-      startAmount,
-      endAmount
+      makeBigNumber(expirationTime ?? getMaxOrderExpirationTimestamp()),
+      makeBigNumber(startAmount),
+      endAmount !== undefined ? makeBigNumber(endAmount) : undefined
     );
 
     const { sellerFee, openseaSellerFee, collectionSellerFee } =
@@ -1110,6 +1130,12 @@ export class OpenSeaPort {
       collectionSellerFee,
     ].filter((item): item is ConsiderationInputItem => item !== undefined);
 
+    if (buyerAddress) {
+      considerationFeeItems.push(
+        ...getPrivateListingConsiderations(offerAssetItems, buyerAddress)
+      );
+    }
+
     const { executeAllActions } = await this.seaport.createOrder(
       {
         offer: offerAssetItems,
@@ -1118,7 +1144,7 @@ export class OpenSeaPort {
         endTime:
           expirationTime?.toString() ??
           getMaxOrderExpirationTimestamp().toString(),
-        zone: OPENSEA_ZONE,
+        zone: DEFAULT_ZONE,
       },
       accountAddress
     );
@@ -1471,31 +1497,89 @@ export class OpenSeaPort {
     return this.validateAndPostOrder(orderWithSignature);
   }
 
-  /**
-   * Fullfill or "take" an order for an asset, either a buy or sell order
-   * NOTE: "Gifting" (fulfilling with recipient address) is not yet supported
-   * NOTE: Fulfilling private listings is not yet supported
-   * @param options fullfillment options
-   * @param options.order The order to fulfill, a.k.a. "take"
-   * @param options.accountAddress The taker's wallet address
-   * @param options.recipientAddress The optional address to receive the order's item(s) or curriencies. If not specified, defaults to accountAddress.
-   * @returns Transaction hash for fulfilling the order
-   */
-  public async fulfillOrder({
+  private async fulfillPrivateOrder({
     order,
     accountAddress,
   }: {
     order: OrderV2;
     accountAddress: string;
-    // TODO: Implement recipientAddress
+  }): Promise<string> {
+    let transactionHash: string;
+    switch (order.protocolAddress) {
+      case CROSS_CHAIN_SEAPORT_ADDRESS: {
+        if (!order.taker?.address) {
+          throw new Error(
+            "Order is not a private listing must have a taker address"
+          );
+        }
+        const counterOrder = constructPrivateListingCounterOrder(
+          order.protocolData,
+          order.taker.address
+        );
+        const fulfillments = getPrivateListingFulfillments(order.protocolData);
+        const transaction = await this.seaport
+          .matchOrders({
+            orders: [order.protocolData, counterOrder],
+            fulfillments,
+            overrides: {
+              value: counterOrder.parameters.offer[0].startAmount,
+            },
+            accountAddress,
+          })
+          .transact();
+        const transactionReceipt = await transaction.wait();
+        transactionHash = transactionReceipt.transactionHash;
+        break;
+      }
+      default:
+        throw new Error("Unsupported protocol");
+    }
+
+    await this._confirmTransaction(
+      transactionHash,
+      EventType.MatchOrders,
+      "Fulfilling order"
+    );
+    return transactionHash;
+  }
+
+  /**
+   * Fullfill or "take" an order for an asset, either a buy or sell order
+   * @param options fullfillment options
+   * @param options.order The order to fulfill, a.k.a. "take"
+   * @param options.accountAddress The taker's wallet address
+   * @param options.recipientAddress The optional address to receive the order's item(s) or curriencies. If not specified, defaults to accountAddress
+   * @returns Transaction hash for fulfilling the order
+   */
+  public async fulfillOrder({
+    order,
+    accountAddress,
+    recipientAddress,
+  }: {
+    order: OrderV2;
+    accountAddress: string;
     recipientAddress?: string;
   }): Promise<string> {
+    const isPrivateListing = !!order.taker;
+    if (isPrivateListing) {
+      if (recipientAddress) {
+        throw new Error(
+          "Private listings cannot be fulfilled with a recipient address"
+        );
+      }
+      return this.fulfillPrivateOrder({
+        order,
+        accountAddress,
+      });
+    }
+
     let transactionHash: string;
     switch (order.protocolAddress) {
       case CROSS_CHAIN_SEAPORT_ADDRESS: {
         const { executeAllActions } = await this.seaport.fulfillOrder({
           order: order.protocolData,
           accountAddress,
+          recipientAddress,
         });
         const transaction = await executeAllActions();
         transactionHash = transaction.hash;
@@ -1523,12 +1607,12 @@ export class OpenSeaPort {
    * @returns Transaction hash for fulfilling the order
    */
   public async prysmFulfillOrder({
-    order,
-    accountAddress,
-    recipientAddress,
-    referrerAddress,
-    useEthers = false,
-  }: {
+                                   order,
+                                   accountAddress,
+                                   recipientAddress,
+                                   referrerAddress,
+                                   useEthers = false,
+                                 }: {
     order: Order;
     accountAddress: string;
     recipientAddress?: string;
@@ -1564,6 +1648,15 @@ export class OpenSeaPort {
     // return transactionHash;
   }
 
+  /**
+   * Fullfill or "take" an order for an asset, either a buy or sell order
+   * @param param0 __namedParamaters Object
+   * @param order The order to fulfill, a.k.a. "take"
+   * @param accountAddress The taker's wallet address
+   * @param recipientAddress The optional address to receive the order's item(s) or curriencies. If not specified, defaults to accountAddress.
+   * @param referrerAddress The optional address that referred the order
+   * @returns Transaction hash for fulfilling the order
+   */
   /**
    * Fullfill or "take" an order for an asset, either a buy or sell order
    * @param param0 __namedParamaters Object
@@ -1639,6 +1732,43 @@ export class OpenSeaPort {
     accountAddress: string;
   }) {
     // this._dispatch(EventType.CancelOrder, { order, accountAddress });
+
+    // Transact and get the transaction hash
+    let transactionHash: string;
+    switch (order.protocolAddress) {
+      case CROSS_CHAIN_SEAPORT_ADDRESS: {
+        transactionHash = await this.cancelSeaportOrders({
+          orders: [order.protocolData.parameters],
+          accountAddress,
+        });
+        break;
+      }
+      default:
+        throw new Error("Unsupported protocol");
+    }
+
+    // Await transaction confirmation
+    await this._confirmTransaction(
+      transactionHash,
+      EventType.CancelOrder,
+      "Cancelling order"
+    );
+  }
+
+  /**
+   * Cancel an order on-chain, preventing it from ever being fulfilled.
+   * @param param0 __namedParameters Object
+   * @param order The order to cancel
+   * @param accountAddress The order maker's wallet address
+   */
+  public async cancelOrderLegacyWyvern({
+    order,
+    accountAddress,
+  }: {
+    order: OrderV2;
+    accountAddress: string;
+  }) {
+    this._dispatch(EventType.CancelOrder, { orderV2: order, accountAddress });
 
     // Transact and get the transaction hash
     let transactionHash: string;
@@ -2506,7 +2636,6 @@ export class OpenSeaPort {
   }): Promise<BigNumber> {
     return new BigNumber(order.currentPrice);
   }
-
   /**
    * Gets the price for the order using the contract
    * @param order The order to calculate the price for
@@ -2613,6 +2742,11 @@ export class OpenSeaPort {
       console.log("Current price is:", currentPrice?.toString());
       return new BigNumber(currentPrice?.toString());
     }
+  /**
+   * Gets the price for the order using the contract
+   * @param order The order to calculate the price for
+   */
+  public async getCurrentPriceLegacyWyvern(order: Order) {
     const currentPrice = await this._wyvernProtocolReadOnly.wyvernExchange
       .calculateCurrentPrice_(
         [
@@ -3663,8 +3797,8 @@ export class OpenSeaPort {
     const { basePrice, extra, paymentToken } = await this._getPriceParameters(
       OrderSide.Buy,
       paymentTokenAddress,
-      expirationTime,
-      startAmount
+      makeBigNumber(expirationTime),
+      makeBigNumber(startAmount)
     );
     const times = this._getTimeParameters({
       expirationTimestamp: expirationTime,
@@ -3780,11 +3914,11 @@ export class OpenSeaPort {
       await this._getPriceParameters(
         OrderSide.Sell,
         paymentTokenAddress,
-        expirationTime,
-        startAmount,
-        endAmount,
+        makeBigNumber(expirationTime),
+        makeBigNumber(startAmount),
+        endAmount !== undefined ? makeBigNumber(endAmount) : undefined,
         waitForHighestBid,
-        englishAuctionReservePrice
+        makeBigNumber(englishAuctionReservePrice)
       );
     const times = this._getTimeParameters({
       expirationTimestamp: expirationTime,
@@ -4027,8 +4161,8 @@ export class OpenSeaPort {
     const { basePrice, extra, paymentToken } = await this._getPriceParameters(
       OrderSide.Buy,
       paymentTokenAddress,
-      expirationTime,
-      startAmount
+      makeBigNumber(expirationTime),
+      makeBigNumber(startAmount)
     );
     const times = this._getTimeParameters({
       expirationTimestamp: expirationTime,
@@ -4146,11 +4280,11 @@ export class OpenSeaPort {
       await this._getPriceParameters(
         OrderSide.Sell,
         paymentTokenAddress,
-        expirationTime,
-        startAmount,
-        endAmount,
+        makeBigNumber(expirationTime),
+        makeBigNumber(startAmount),
+        endAmount !== undefined ? makeBigNumber(endAmount) : undefined,
         waitForHighestBid,
-        englishAuctionReservePrice
+        makeBigNumber(englishAuctionReservePrice)
       );
     const times = this._getTimeParameters({
       expirationTimestamp: expirationTime,
@@ -4625,7 +4759,10 @@ export class OpenSeaPort {
    * @returns Transaction hash of the approval transaction
    */
   public async approveOrder(order: OrderV2) {
-    // this._dispatch(EventType.ApproveOrder, { order, accountAddress });
+    this._dispatch(EventType.ApproveOrder, {
+      orderV2: order,
+      accountAddress: order.maker.address,
+    });
 
     let transactionHash: string;
     switch (order.protocolAddress) {
@@ -5391,13 +5528,14 @@ export class OpenSeaPort {
   public async _getPriceParameters(
     orderSide: OrderSide,
     tokenAddress: string,
-    expirationTime: number,
-    startAmount: number,
-    endAmount?: number,
+    expirationTime: BigNumber,
+    startAmount: BigNumber,
+    endAmount?: BigNumber,
     waitingForBestCounterOrder = false,
-    englishAuctionReservePrice?: number
+    englishAuctionReservePrice?: BigNumber
   ) {
-    const priceDiff = endAmount != null ? startAmount - endAmount : 0;
+    const priceDiff =
+      endAmount != null ? startAmount.minus(endAmount) : new BigNumber(0);
     const paymentToken = tokenAddress.toLowerCase();
     const isEther = tokenAddress == NULL_ADDRESS;
     const { tokens } = await this.api.getPaymentTokens({
@@ -5406,7 +5544,7 @@ export class OpenSeaPort {
     const token = tokens[0];
 
     // Validation
-    if (isNaN(startAmount) || startAmount == null || startAmount < 0) {
+    if (startAmount.isNaN() || startAmount == null || startAmount.lt(0)) {
       throw new Error(`Starting price must be a number >= 0`);
     }
     if (!isEther && !token) {
@@ -5420,21 +5558,26 @@ export class OpenSeaPort {
     if (isEther && orderSide === OrderSide.Buy) {
       throw new Error(`Offers must use wrapped ETH or an ERC-20 token.`);
     }
-    if (priceDiff < 0) {
+    if (priceDiff.lt(0)) {
       throw new Error(
         "End price must be less than or equal to the start price."
       );
     }
-    if (priceDiff > 0 && expirationTime == 0) {
+    if (priceDiff.gt(0) && expirationTime.eq(0)) {
       throw new Error(
         "Expiration time must be set if order will change in price."
       );
     }
-    if (englishAuctionReservePrice && !waitingForBestCounterOrder) {
+    if (
+      englishAuctionReservePrice &&
+      !englishAuctionReservePrice.isZero() &&
+      !waitingForBestCounterOrder
+    ) {
       throw new Error("Reserve prices may only be set on English auctions.");
     }
     if (
       englishAuctionReservePrice &&
+      !englishAuctionReservePrice.isZero() &&
       englishAuctionReservePrice < startAmount
     ) {
       throw new Error(
@@ -5448,10 +5591,15 @@ export class OpenSeaPort {
       ? makeBigNumber(
           this.web3.utils.toWei(startAmount.toString(), "ether")
         ).integerValue()
-      : WyvernProtocol.toBaseUnitAmount(
-          makeBigNumber(startAmount),
-          token.decimals
-        );
+      : WyvernProtocol.toBaseUnitAmount(startAmount, token.decimals);
+
+    const endPrice = endAmount
+      ? isEther
+        ? makeBigNumber(
+            this.web3.utils.toWei(endAmount.toString(), "ether")
+          ).integerValue()
+        : WyvernProtocol.toBaseUnitAmount(endAmount, token.decimals)
+      : undefined;
 
     const endPrice = endAmount
       ? isEther
@@ -5468,10 +5616,7 @@ export class OpenSeaPort {
       ? makeBigNumber(
           this.web3.utils.toWei(priceDiff.toString(), "ether")
         ).integerValue()
-      : WyvernProtocol.toBaseUnitAmount(
-          makeBigNumber(priceDiff),
-          token.decimals
-        );
+      : WyvernProtocol.toBaseUnitAmount(priceDiff, token.decimals);
 
     const reservePrice = englishAuctionReservePrice
       ? isEther
@@ -5482,7 +5627,7 @@ export class OpenSeaPort {
             )
           ).integerValue()
         : WyvernProtocol.toBaseUnitAmount(
-            makeBigNumber(englishAuctionReservePrice),
+            englishAuctionReservePrice,
             token.decimals
           )
       : undefined;
@@ -5689,302 +5834,106 @@ export class OpenSeaPort {
     }
     return txHash;
   }
-
-  // Throws
+// Throws
   public async prysmBuyOrderValidationAndApprovals({
-    order,
-    counterOrder,
-    accountAddress,
-    useEthers,
-  }: {
-    order: UnhashedOrder;
-    counterOrder?: Order;
-    accountAddress: string;
-    useEthers?: boolean;
-  }) {
-    const tokenAddress = order.paymentToken;
+      order,
+      counterOrder,
+      accountAddress,
+      useEthers,
+    }: {
+      order: UnhashedOrder;
+      counterOrder?: Order;
+      accountAddress: string;
+      useEthers?: boolean;
+    }) {
+      const tokenAddress = order.paymentToken;
 
-    if (tokenAddress != NULL_ADDRESS) {
-      const balance = await this.getTokenBalance({
-        accountAddress,
-        tokenAddress,
-      });
+      if (tokenAddress != NULL_ADDRESS) {
+        const balance = await this.getTokenBalance({
+          accountAddress,
+          tokenAddress,
+        });
 
-      /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
-      let minimumAmount = makeBigNumber(order.basePrice);
-      if (counterOrder) {
-        minimumAmount = await this._getRequiredAmountForTakingSellOrder(
-          counterOrder
-        );
-      }
+        /* NOTE: no buy-side auctions for now, so sell.saleKind === 0 */
+        let minimumAmount = makeBigNumber(order.basePrice);
+        if (counterOrder) {
+          minimumAmount = await this._getRequiredAmountForTakingSellOrder(
+            counterOrder
+          );
+        }
 
-      // Check WETH balance
-      if (balance.toNumber() < minimumAmount.toNumber()) {
-        if (
-          tokenAddress ==
-          WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
-        ) {
-          throw new Error("Insufficient balance. You may need to wrap Ether.");
-        } else {
-          throw new Error("Insufficient balance.");
+        // Check WETH balance
+        if (balance.toNumber() < minimumAmount.toNumber()) {
+          if (
+            tokenAddress ==
+            WyvernSchemas.tokens[this._networkName].canonicalWrappedEther.address
+          ) {
+            throw new Error("Insufficient balance. You may need to wrap Ether.");
+          } else {
+            throw new Error("Insufficient balance.");
+          }
+        }
+
+        // Check token approval
+        // This can be done at a higher level to show UI
+        const needsApprovalCalldata = await this.prysmApproveFungibleToken({
+          accountAddress,
+          tokenAddress,
+          minimumAmount,
+        });
+        if (needsApprovalCalldata) {
+          return needsApprovalCalldata;
         }
       }
 
-      // Check token approval
-      // This can be done at a higher level to show UI
-      const needsApprovalCalldata = await this.prysmApproveFungibleToken({
-        accountAddress,
-        tokenAddress,
-        minimumAmount,
-      });
-      if (needsApprovalCalldata) {
-        return needsApprovalCalldata;
+      let buyValid = false;
+      if (useEthers) {
+        // Check order formation
+        buyValid = await this._validateOrderParameters(order);
+      } else {
+        buyValid = await this._wyvernProtocolReadOnly.wyvernExchange
+          .validateOrderParameters_(
+            [
+              order.exchange,
+              order.maker,
+              order.taker,
+              order.feeRecipient,
+              order.target,
+              order.staticTarget,
+              order.paymentToken,
+            ],
+            [
+              order.makerRelayerFee,
+              order.takerRelayerFee,
+              order.makerProtocolFee,
+              order.takerProtocolFee,
+              order.basePrice,
+              order.extra,
+              order.listingTime,
+              order.expirationTime,
+              order.salt,
+            ],
+            order.feeMethod,
+            order.side,
+            order.saleKind,
+            order.howToCall,
+            order.calldata,
+            order.replacementPattern,
+            order.staticExtradata
+          )
+          .callAsync({ from: accountAddress });
       }
-    }
-
-    let buyValid = false;
-    if (useEthers) {
-      // Check order formation
-      buyValid = await this._validateOrderParameters(order);
-    } else {
-      buyValid = await this._wyvernProtocolReadOnly.wyvernExchange
-        .validateOrderParameters_(
-          [
-            order.exchange,
-            order.maker,
-            order.taker,
-            order.feeRecipient,
-            order.target,
-            order.staticTarget,
-            order.paymentToken,
-          ],
-          [
-            order.makerRelayerFee,
-            order.takerRelayerFee,
-            order.makerProtocolFee,
-            order.takerProtocolFee,
-            order.basePrice,
-            order.extra,
-            order.listingTime,
-            order.expirationTime,
-            order.salt,
-          ],
-          order.feeMethod,
-          order.side,
-          order.saleKind,
-          order.howToCall,
-          order.calldata,
-          order.replacementPattern,
-          order.staticExtradata
-        )
-        .callAsync({ from: accountAddress });
-    }
-    if (!buyValid) {
-      console.error(order);
-      throw new Error(
-        `Failed to validate buy order parameters. Make sure you're on the right network!`
-      );
-    }
-    return null;
-  }
-
-  private async _prysmAtomicMatch({
-    buy,
-    sell,
-    accountAddress,
-    metadata = NULL_BLOCK_HASH,
-    useEthers = false,
-  }: {
-    buy: Order;
-    sell: Order;
-    accountAddress: string;
-    metadata?: string;
-    useEthers?: boolean;
-  }) {
-    let value;
-    let shouldValidateBuy = true;
-    let shouldValidateSell = true;
-    const exchange =
-      this._wyvernProtocol.wyvernExchange.address ||
-      WyvernProtocol.getExchangeContractAddress(this._networkName);
-    const wyvernProtocolReadOnly = this._wyvernProtocolReadOnly;
-
-    if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
-      // USER IS THE SELLER, only validate the buy order
-      await this.prysmSellOrderValidationAndApprovals({
-        order: sell,
-        accountAddress,
-      });
-      shouldValidateSell = false;
-    } else if (buy.maker.toLowerCase() == accountAddress.toLowerCase()) {
-      // USER IS THE BUYER, only validate the sell order
-      await this.prysmBuyOrderValidationAndApprovals({
-        order: buy,
-        counterOrder: sell,
-        accountAddress,
-        useEthers,
-      });
-      shouldValidateBuy = false;
-
-      // If using ETH to pay, set the value of the transaction to the current price
-      if (buy.paymentToken == NULL_ADDRESS) {
-        value = await this._getRequiredAmountForTakingSellOrder(
-          sell,
-          useEthers
+      if (!buyValid) {
+        console.error(order);
+        throw new Error(
+          `Failed to validate buy order parameters. Make sure you're on the right network!`
         );
       }
-    } else {
-      // User is neither - matching service
+      return null;
     }
-
-    const validateMatch = await this._validateMatch({
-      buy,
-      sell,
-      accountAddress,
-      shouldValidateBuy,
-      shouldValidateSell,
-    });
-    this.logger("validateMatch: " + validateMatch);
-
-    this._dispatch(EventType.MatchOrders, {
-      buy,
-      sell,
-      accountAddress,
-      matchMetadata: metadata,
-    });
-
-    //let txHash;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const txnData: any = { from: accountAddress, value };
-    const args: WyvernAtomicMatchParameters = [
-      [
-        buy.exchange,
-        buy.maker,
-        buy.taker,
-        buy.feeRecipient,
-        buy.target,
-        buy.staticTarget,
-        buy.paymentToken,
-        sell.exchange,
-        sell.maker,
-        sell.taker,
-        sell.feeRecipient,
-        sell.target,
-        sell.staticTarget,
-        sell.paymentToken,
-      ],
-      [
-        buy.makerRelayerFee,
-        buy.takerRelayerFee,
-        buy.makerProtocolFee,
-        buy.takerProtocolFee,
-        buy.basePrice,
-        buy.extra,
-        buy.listingTime,
-        buy.expirationTime,
-        buy.salt,
-        sell.makerRelayerFee,
-        sell.takerRelayerFee,
-        sell.makerProtocolFee,
-        sell.takerProtocolFee,
-        sell.basePrice,
-        sell.extra,
-        sell.listingTime,
-        sell.expirationTime,
-        sell.salt,
-      ],
-      [
-        buy.feeMethod,
-        buy.side,
-        buy.saleKind,
-        buy.howToCall,
-        sell.feeMethod,
-        sell.side,
-        sell.saleKind,
-        sell.howToCall,
-      ],
-      buy.calldata,
-      sell.calldata,
-      buy.replacementPattern,
-      sell.replacementPattern,
-      buy.staticExtradata,
-      sell.staticExtradata,
-      [buy.v || 0, sell.v || 0],
-      [
-        buy.r || NULL_BLOCK_HASH,
-        buy.s || NULL_BLOCK_HASH,
-        sell.r || NULL_BLOCK_HASH,
-        sell.s || NULL_BLOCK_HASH,
-        metadata,
-      ],
-    ];
-
-    // Estimate gas first
-    try {
-      const prot = (wyvernProtocolReadOnly as unknown as any)?.wyvernExchange
-        ?.web3ContractInstance?.address;
-      this.logger("wyvernProtocolReadOnly" + wyvernProtocolReadOnly);
-      this.logger(
-        "atomic match exchange address is" +
-          prot +
-          " EXCHANGE address is " +
-          exchange +
-          " buy.exchange is " +
-          buy.exchange
-      );
-      // Typescript splat doesn't typecheck
-      const gasEstimate = await wyvernProtocolReadOnly.wyvernExchange
-        .atomicMatch_(
-          args[0],
-          args[1],
-          args[2],
-          args[3],
-          args[4],
-          args[5],
-          args[6],
-          args[7],
-          args[8],
-          args[9],
-          args[10]
-        )
-        .estimateGasAsync(txnData);
-
-      txnData.gas = this._correctGasAmount(gasEstimate);
-
-      console.log("Args == ", args);
-      console.log("Gas Estimate == ", gasEstimate);
-      console.log("Correct Gas Estimate == ", txnData.gas);
-    } catch (error) {
-      console.error(`Failed atomic match with args: `, args, error);
-      throw new Error(
-        `Oops, the Ethereum network rejected this transaction :( The OpenSea devs have been alerted, but this problem is typically due an item being locked or untransferrable. The exact error was "${
-          error instanceof Error
-            ? error.message.substr(0, MAX_ERROR_LENGTH)
-            : "unknown"
-        }..."`
-      );
-    }
-    const argsPrysm: WyvernAtomicMatchParametersPrysm = [
-      args[0],
-      args[1].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
-      args[2].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
-      args[3],
-      args[4],
-      args[5],
-      args[6],
-      args[7],
-      args[8],
-      args[9].map((bn) => bn.toFixed(0, BigNumber.ROUND_FLOOR)),
-      args[10],
-    ];
-    return { args: argsPrysm, txnData, to: buy.exchange };
-  }
-
-  private async _getRequiredAmountForTakingSellOrder(
-    sell: Order,
-    useEthers = false
-  ) {
-    const currentPrice = await this.getCurrentPricePrysm(sell, useEthers);
+    
+  private async _getRequiredAmountForTakingSellOrder(sell: Order) {
+    const currentPrice = await this.getCurrentPriceLegacyWyvern(sell);
     const estimatedPrice = estimateCurrentPrice(sell);
 
     const maxPrice = BigNumber.max(currentPrice, estimatedPrice);

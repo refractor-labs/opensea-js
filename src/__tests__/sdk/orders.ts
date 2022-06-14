@@ -11,8 +11,8 @@ import {
   NULL_ADDRESS,
   OPENSEA_FEE_RECIPIENT,
   RINKEBY_PROVIDER_URL,
-} from "../../../src/constants";
-import { OpenSeaPort } from "../../index";
+} from "../../constants";
+import { OpenSeaSDK } from "../../index";
 import {
   Asset,
   Network,
@@ -65,7 +65,7 @@ const englishSellOrderJSON = ordersJSON[0] as OrderJSON;
 const provider = new Web3.providers.HttpProvider(MAINNET_PROVIDER_URL);
 const rinkebyProvider = new Web3.providers.HttpProvider(RINKEBY_PROVIDER_URL);
 
-const client = new OpenSeaPort(
+const client = new OpenSeaSDK(
   provider,
   {
     networkName: Network.Main,
@@ -74,7 +74,7 @@ const client = new OpenSeaPort(
   (line) => console.info(`MAINNET: ${line}`)
 );
 
-const rinkebyClient = new OpenSeaPort(
+const rinkebyClient = new OpenSeaSDK(
   rinkebyProvider,
   {
     networkName: Network.Rinkeby,
@@ -96,7 +96,7 @@ const assetsForBulkTransfer = assetsForBundleOrder;
 let manaAddress: string;
 let daiAddress: string;
 
-suite("seaport: orders", () => {
+suite("SDK: orders", () => {
   before(async () => {
     daiAddress = (await client.api.getPaymentTokens({ symbol: "DAI" }))
       .tokens[0].address;
@@ -312,7 +312,8 @@ suite("seaport: orders", () => {
 
   test("Correctly errors for invalid buy order price parameters", async () => {
     const accountAddress = ALEX_ADDRESS_2;
-    const expirationTime = Math.round(Date.now() / 1000 + 60); // one minute from now
+    const currentSeconds = Math.round(Date.now() / 1000);
+    const expirationTime = currentSeconds + 20 * 60; // 20 minutes from now
     const tokenId = MYTHEREUM_TOKEN_ID.toString();
     const tokenAddress = MYTHEREUM_ADDRESS;
 
@@ -340,7 +341,8 @@ suite("seaport: orders", () => {
     const takerAddress = ALEX_ADDRESS_2;
     const amountInToken = 1.2;
     const paymentTokenAddress = WETH_ADDRESS;
-    const expirationTime = Math.round(Date.now() / 1000 + 900); // one minute from now
+    const currentSeconds = Math.round(Date.now() / 1000);
+    const expirationTime = currentSeconds + 20 * 60; // 20 minutes from now
     const bountyPercent = 1.1;
 
     const tokenId = MYTHEREUM_TOKEN_ID.toString();
@@ -906,6 +908,7 @@ suite("seaport: orders", () => {
     const order = await client.api.getOrderLegacyWyvern({
       side: OrderSide.Sell,
       payment_token_address: manaAddress,
+      taker: NULL_ADDRESS,
     });
 
     assert.isNotNull(order.paymentTokenContract);
@@ -955,6 +958,7 @@ suite("seaport: orders", () => {
   test.skip("orderToJSON computes correct current price for Dutch auctions", async () => {
     const { orders } = await client.api.getOrdersLegacyWyvern({
       sale_kind: SaleKind.DutchAuction,
+      side: OrderSide.Sell,
     });
     assert.equal(orders.length, client.api.pageSize);
     orders.map((order) => {
@@ -1010,7 +1014,8 @@ suite("seaport: orders", () => {
     });
   });
 
-  test("orderToJSON current price does not include buyer fee for English auctions", async () => {
+  // Flaky due to DB statement timeout
+  test.skip("orderToJSON current price does not include buyer fee for English auctions", async () => {
     const { orders } = await client.api.getOrdersLegacyWyvern({
       side: OrderSide.Sell,
       is_english: true,

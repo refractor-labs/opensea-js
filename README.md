@@ -2,10 +2,6 @@
   <img src="https://storage.googleapis.com/opensea-static/opensea-js-logo-updated.png" />
 </p>
 
-### Requirements:
-
-v14.18.0 npm 6.14.15
-
 # OpenSea.js <!-- omit in toc -->
 
 [![https://badges.frapsoft.com/os/mit/mit.svg?v=102](https://badges.frapsoft.com/os/mit/mit.svg?v=102)](https://opensource.org/licenses/MIT)
@@ -13,21 +9,6 @@ v14.18.0 npm 6.14.15
 [![styled with prettier](https://img.shields.io/badge/styled_with-prettier-ff69b4.svg)](https://github.com/prettier/prettier)
 
 <!-- [![npm](https://img.shields.io/npm/v/wyvern-js.svg)](https://www.npmjs.com/package/wyvern-js) [![npm](https://img.shields.io/npm/dt/wyvern-js.svg)](https://www.npmjs.com/package/wyvern-js) -->
-
-## v4.0.0-beta.0
-
-This is a beta release of opensea-js supporting querying for, creating, cancelling and fulfilling listings and offers on the new Seaport Protocol.
-
-### Currently unsupported features
-
-- Creating and fulfilling private listings
-- Creating and fulfilling bundle listings and offers
-- Creating listings and offers with non-single quantities for ERC1155s
-- Fulfilling listings for different recipient addresses (gifting)
-
-Support for these features will come in a future release.
-
----
 
 A JavaScript library for crypto-native ecommerce: buying, selling, and bidding on any cryptogood. With OpenSea.js, you can easily build your own native marketplace for your non-fungible tokens, or NFTs. These can be ERC-721 or ERC-1155 (semi-fungible) items. You don't have to deploy your own smart contracts or backend orderbooks.
 
@@ -39,11 +20,9 @@ Published on [GitHub](https://github.com/ProjectOpenSea/opensea-js) and [npm](ht
   - [Fetching Assets](#fetching-assets)
     - [Checking Balances and Ownerships](#checking-balances-and-ownerships)
   - [Making Offers](#making-offers)
-    - [Bidding on Multiple Assets](#bidding-on-multiple-assets)
     - [Bidding on ENS Short Name Auctions](#bidding-on-ens-short-name-auctions)
     - [Offer Limits](#offer-limits)
   - [Making Listings / Selling Items](#making-listings--selling-items)
-    - [Creating English Auctions](#creating-english-auctions)
   - [Running Crowdsales](#running-crowdsales)
   - [Fetching Orders](#fetching-orders)
   - [Buying Items](#buying-items)
@@ -53,7 +32,6 @@ Published on [GitHub](https://github.com/ProjectOpenSea/opensea-js) and [npm](ht
   - [Scheduling Future Listings](#scheduling-future-listings)
   - [Purchasing Items for Other Users](#purchasing-items-for-other-users)
   - [Bulk Transfers](#bulk-transfers)
-  - [Creating Bundles](#creating-bundles)
   - [Using ERC-20 Tokens Instead of Ether](#using-erc-20-tokens-instead-of-ether)
   - [Private Auctions](#private-auctions)
   - [Sharing Sale Fees with OpenSea](#sharing-sale-fees-with-opensea)
@@ -69,7 +47,7 @@ Published on [GitHub](https://github.com/ProjectOpenSea/opensea-js) and [npm](ht
 
 This is the JavaScript SDK for [OpenSea](https://opensea.io), the largest marketplace for NFTs.
 
-It allows developers to access the official orderbook, filter it, create buy orders (**offers**), create sell orders (**auctions**), create collections of assets to sell at once (**bundles**), and complete trades programmatically.
+It allows developers to access the official orderbook, filter it, create buy orders (**offers**), create sell orders (**auctions**), and complete trades programmatically.
 
 Get started by [requesting an API key](https://docs.opensea.io/reference) and instantiating your own OpenSea SDK instance. Then you can create orders off-chain or fulfill orders on-chain, and listen to events (like `ApproveAllAssets` or `WrapEth`) in the process.
 
@@ -99,16 +77,16 @@ sudo npm explore npm -g -- npm install node-gyp@latest # (Optional) update node-
 
 To get started, first request an API key [here](https://docs.opensea.io/reference). Note the terms of use for using API data.
 
-Then, create a new OpenSeaJS client, called an OpenSeaPort 🚢, using your Web3 provider:
+Then, create a new OpenSeaJS client, called an OpenSeaSDK 🚢, using your Web3 provider:
 
 ```JavaScript
 import * as Web3 from 'web3'
-import { OpenSeaPort, Network } from 'opensea-js'
+import { OpenSeaSDK, Network } from 'opensea-js'
 
 // This example provider won't let you make transactions, only read-only calls:
 const provider = new Web3.providers.HttpProvider('https://mainnet.infura.io')
 
-const openseaSDK = new OpenSeaPort(provider, {
+const openseaSDK = new OpenSeaSDK(provider, {
   networkName: Network.Main,
   apiKey: YOUR_API_KEY
 })
@@ -208,23 +186,6 @@ const offer = await openseaSDK.createBuyOrder({
 ```
 
 When you make an offer on an item owned by an OpenSea user, **that user will automatically get an email notifying them with the offer amount**, if it's above their desired threshold.
-
-#### Bidding on Multiple Assets
-
-You can also make an offer on a bundle of assets. This could also be used for creating a bounty for whoever can acquire a list of items. Here's how you do it:
-
-```JavaScript
-const assets = YOUR_ASSETS
-const offer = await openseaSDK.createBundleBuyOrder({
-  assets,
-  accountAddress,
-  startAmount: 2.4,
-  // Optional expiration time for the order, in Unix time (seconds):
-  expirationTime: Math.round(Date.now() / 1000 + 60 * 60 * 24) // One day from now
-})
-```
-
-When you bid on multiple assets, an email will be sent to the owner if a bundle exists on OpenSea that contains the assets. In the future, OpenSea will send emails to multiple owners if the assets aren't all owned by the same wallet.
 
 #### Bidding on ENS Short Name Auctions
 
@@ -474,7 +435,7 @@ For more information, check out the documentation for WyvernSchemas on https://p
 
 ## Advanced
 
-Interested in purchasing for users server-side or with a bot, making bundling items together, scheduling future orders, or making bids in different ERC-20 tokens? OpenSea.js can help with that.
+Interested in purchasing for users server-side or with a bot, scheduling future orders, or making bids in different ERC-20 tokens? OpenSea.js can help with that.
 
 ### Scheduling Future Listings
 
@@ -522,28 +483,6 @@ const transactionHash = await openseaSDK.transferAll({
 ```
 
 This will automatically approve the assets for trading and confirm the transaction for sending them.
-
-### Creating Bundles
-
-You can also create bundles of assets to sell at the same time! If the owner has approved all the assets in the bundle already, only a signature is needed to create it.
-
-To make a bundle, it's just one call:
-
-```JavaScript
-const assets: Array<{tokenId: string; tokenAddress: string}> = [...]
-
-const bundle = await openseaSDK.createBundleSellOrder({
-  bundleName, bundleDescription, bundleExternalLink,
-  assets, accountAddress, startAmount, endAmount,
-  expirationTime, paymentTokenAddress
-})
-```
-
-The parameters `bundleDescription`, `bundleExternalLink`, and `expirationTime` are optional, and `endAmount` can equal `startAmount`, similar to the normal `createSellOrder` functionality.
-
-The parameter `paymentTokenAddress` is the address of the ERC-20 token to accept in return. If it's `undefined` or `null`, the amount is assumed to be in Ether.
-
-Wait what, you can use other currencies than ETH?
 
 ### Using ERC-20 Tokens Instead of Ether
 
@@ -616,68 +555,68 @@ Our recommendation is that you "forward" OpenSea events to your own store or sta
 ```JavaScript
 import { EventType } from 'opensea-js'
 import * as ActionTypes from './index'
-import { openSeaPort } from '../globalSingletons'
+import { openSeaSDK } from '../globalSingletons'
 
 // ...
 
-handleSeaportEvents() {
+handleSDKEvents() {
   return async function(dispatch, getState) {
-    openSeaPort.addListener(EventType.TransactionCreated, ({ transactionHash, event }) => {
+    openSeaSDK.addListener(EventType.TransactionCreated, ({ transactionHash, event }) => {
       console.info({ transactionHash, event })
       dispatch({ type: ActionTypes.SET_PENDING_TRANSACTION_HASH, hash: transactionHash })
     })
-    openSeaPort.addListener(EventType.TransactionConfirmed, ({ transactionHash, event }) => {
+    openSeaSDK.addListener(EventType.TransactionConfirmed, ({ transactionHash, event }) => {
       console.info({ transactionHash, event })
       // Only reset your exchange UI if we're finishing an order fulfillment or cancellation
       if (event == EventType.MatchOrders || event == EventType.CancelOrder) {
         dispatch({ type: ActionTypes.RESET_EXCHANGE })
       }
     })
-    openSeaPort.addListener(EventType.TransactionDenied, ({ transactionHash, event }) => {
+    openSeaSDK.addListener(EventType.TransactionDenied, ({ transactionHash, event }) => {
       console.info({ transactionHash, event })
       dispatch({ type: ActionTypes.RESET_EXCHANGE })
     })
-    openSeaPort.addListener(EventType.TransactionFailed, ({ transactionHash, event }) => {
+    openSeaSDK.addListener(EventType.TransactionFailed, ({ transactionHash, event }) => {
       console.info({ transactionHash, event })
       dispatch({ type: ActionTypes.RESET_EXCHANGE })
     })
-    openSeaPort.addListener(EventType.InitializeAccount, ({ accountAddress }) => {
+    openSeaSDK.addListener(EventType.InitializeAccount, ({ accountAddress }) => {
       console.info({ accountAddress })
       dispatch({ type: ActionTypes.INITIALIZE_PROXY })
     })
-    openSeaPort.addListener(EventType.WrapEth, ({ accountAddress, amount }) => {
+    openSeaSDK.addListener(EventType.WrapEth, ({ accountAddress, amount }) => {
       console.info({ accountAddress, amount })
       dispatch({ type: ActionTypes.WRAP_ETH })
     })
-    openSeaPort.addListener(EventType.UnwrapWeth, ({ accountAddress, amount }) => {
+    openSeaSDK.addListener(EventType.UnwrapWeth, ({ accountAddress, amount }) => {
       console.info({ accountAddress, amount })
       dispatch({ type: ActionTypes.UNWRAP_WETH })
     })
-    openSeaPort.addListener(EventType.ApproveCurrency, ({ accountAddress, tokenAddress }) => {
+    openSeaSDK.addListener(EventType.ApproveCurrency, ({ accountAddress, tokenAddress }) => {
       console.info({ accountAddress, tokenAddress })
       dispatch({ type: ActionTypes.APPROVE_WETH })
     })
-    openSeaPort.addListener(EventType.ApproveAllAssets, ({ accountAddress, proxyAddress, tokenAddress }) => {
+    openSeaSDK.addListener(EventType.ApproveAllAssets, ({ accountAddress, proxyAddress, tokenAddress }) => {
       console.info({ accountAddress, proxyAddress, tokenAddress })
       dispatch({ type: ActionTypes.APPROVE_ALL_ASSETS })
     })
-    openSeaPort.addListener(EventType.ApproveAsset, ({ accountAddress, proxyAddress, tokenAddress, tokenId }) => {
+    openSeaSDK.addListener(EventType.ApproveAsset, ({ accountAddress, proxyAddress, tokenAddress, tokenId }) => {
       console.info({ accountAddress, proxyAddress, tokenAddress, tokenId })
       dispatch({ type: ActionTypes.APPROVE_ASSET })
     })
-    openSeaPort.addListener(EventType.CreateOrder, ({ order, accountAddress }) => {
+    openSeaSDK.addListener(EventType.CreateOrder, ({ order, accountAddress }) => {
       console.info({ order, accountAddress })
       dispatch({ type: ActionTypes.CREATE_ORDER })
     })
-    openSeaPort.addListener(EventType.OrderDenied, ({ order, accountAddress }) => {
+    openSeaSDK.addListener(EventType.OrderDenied, ({ order, accountAddress }) => {
       console.info({ order, accountAddress })
       dispatch({ type: ActionTypes.RESET_EXCHANGE })
     })
-    openSeaPort.addListener(EventType.MatchOrders, ({ buy, sell, accountAddress }) => {
+    openSeaSDK.addListener(EventType.MatchOrders, ({ buy, sell, accountAddress }) => {
       console.info({ buy, sell, accountAddress })
       dispatch({ type: ActionTypes.FULFILL_ORDER })
     })
-    openSeaPort.addListener(EventType.CancelOrder, ({ order, accountAddress }) => {
+    openSeaSDK.addListener(EventType.CancelOrder, ({ order, accountAddress }) => {
       console.info({ order, accountAddress })
       dispatch({ type: ActionTypes.CANCEL_ORDER })
     })
